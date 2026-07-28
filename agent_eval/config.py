@@ -42,8 +42,8 @@ def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
         "$schema": "https://opencode.ai/config.json",
         "agent": {
             "build": {
-                "temperature": 0,
-                "top_p": 0.01,
+                "temperature": 0.6,
+                "top_p": 0.95,
                 "steps": 20,
             }
         },

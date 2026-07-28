@@ -36,6 +36,8 @@ Agent 看不到数据集仓库中的 `*_ref.sv` 和 `*_test.sv`。Agent 退出�
 
 Docker 容器使用只读根文件系统、非 root UID、空 capabilities，并且不挂载 Docker socket。只有当前题目的 `/workspace` 可写。
 
+Adapter 是 CLI 翻译层，不是另一个 Agent 循环。OpenCode Adapter 负责生成 `opencode.json`、选择 provider/model、拼接非交互命令并采集 JSONL；Pi Adapter 做相同的 CLI 参数转换。Adapter 不解析模型原始工具语法，也不会把普通文本伪装成工具调用。模型输出先由 vLLM 的 `qwen3_coder` parser 转换为 OpenAI `tool_calls`，再由 OpenCode 执行。若模型只输出 `<read...>` 之类普通文本，OpenCode 会将其作为文本正常结束，监督器最终记录 `missing_submission`。
+
 ## 3. 前置条件
 
 运行环境需要：
@@ -264,7 +266,9 @@ Agent 状态与评分状态是两个不同层次。
 
 `completed` 不等于 `passed`。它只表示 Agent 执行正常；最终正确性必须查看 `grade.status` 和 `passed`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时没有 `TopModule.sv`，结果按 `missing_submission` 计为失败。
 
-正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 的 build agent 固定使用 `temperature=0`、`top_p=0.01`，公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。
+正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 的 build agent 固定使用 `temperature=0.6`、`top_p=0.95`，与本项目 vLLM 的 `--override-generation-config` 一致；公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。OpenCode 在 API 请求中显式发送的采样参数优先于 vLLM 默认值，因此两处配置必须保持一致。
+
+现有 model-only 低温基线使用 `temperature=0`、`top_p=0.01`，不能与上述 Agent 结果直接做严格归因比较。若要比较 model-only 与 Agent，应使用 `--with-temperature=0.6 --with-top-p=0.95` 重新生成同采样配置的 model-only 基线，或将低温 Agent 的工具协议失败单独作为兼容性结果报告。
 
 测试命令的退出码主要表示监督器是否完成所有轨迹，不表示所有题目都通过。通过率应读取 `summary.csv` 或终端中的 `x/y passed`。
 
