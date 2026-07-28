@@ -68,6 +68,8 @@ class AdapterTests(unittest.TestCase):
         self.assertIn("--pure", command)
         self.assertIn("/workspace", command)
         self.assertIn("Do not narrate", command[-1])
+        self.assertIn("<tool_call>", command[-1])
+        self.assertIn("<function=read>", command[-1])
 
     def test_unknown_adapter_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown agent"):
@@ -94,6 +96,10 @@ class ConfigTests(unittest.TestCase):
             self.assertIn(
                 "qwen3.6-coder",
                 opencode_config["provider"]["vllm-local"]["models"],
+            )
+            self.assertTrue(
+                opencode_config["provider"]["vllm-local"]["models"]
+                ["qwen3.6-coder"]["tool_call"]
             )
             self.assertEqual(opencode_config["agent"]["build"]["temperature"], 0.6)
             self.assertEqual(opencode_config["agent"]["build"]["top_p"], 0.95)
