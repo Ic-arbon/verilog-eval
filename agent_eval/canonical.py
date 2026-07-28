@@ -67,15 +67,18 @@ def canonical_commands(
     task: str,
     jobs: int,
     bash_path: str,
+    max_tokens: int = 8192,
+    temperature: float = 0.6,
+    top_p: float = 0.95,
 ) -> Tuple[Sequence[str], Sequence[str]]:
     configure = [
         str(repo_root / "configure"),
         "--with-model=agent-pregen",
         f"--with-task={task}",
         "--with-samples=1",
-        "--with-max-tokens=8192",
-        "--with-temperature=0.6",
-        "--with-top-p=0.95",
+        f"--with-max-tokens={max_tokens}",
+        f"--with-temperature={temperature}",
+        f"--with-top-p={top_p}",
         f"--with-problems={problems_file}",
         f"--with-pregen={pregen_root}",
     ]
@@ -123,6 +126,9 @@ def run_canonical_evaluation(
     agent_results: Mapping[str, AgentResult],
     jobs: int,
     bash_path: str,
+    max_tokens: int = 8192,
+    temperature: float = 0.6,
+    top_p: float = 0.95,
     run: CommandRunner = subprocess.run,
 ) -> Tuple[Dict[str, VerilogEvalResult], Path]:
     canonical_root = agent_root / "verilog-eval"
@@ -149,6 +155,9 @@ def run_canonical_evaluation(
         task=task,
         jobs=jobs,
         bash_path=bash_path,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        top_p=top_p,
     )
 
     environment = os.environ.copy()

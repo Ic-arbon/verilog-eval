@@ -10,7 +10,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -34,12 +34,34 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate external coding agents")
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--agent", choices=["pi", "opencode", "all"], default="all")
-    parser.add_argument("--task", choices=["spec-to-rtl", "code-complete-iccad2023"], default="spec-to-rtl")
-    parser.add_argument("--model", default="qwen3.6-coder")
+    parser.add_argument(
+        "--task",
+        "--with-task",
+        choices=["spec-to-rtl", "code-complete-iccad2023"],
+        default="spec-to-rtl",
+    )
+    parser.add_argument("--model", "--with-model", default="qwen3.6-coder")
+    parser.add_argument("--samples", "--with-samples", type=int, default=1)
+    parser.add_argument("--max-tokens", "--with-max-tokens", type=int, default=8192)
+    parser.add_argument(
+        "--temperature", "--with-temperature", type=float, default=0.6
+    )
+    parser.add_argument("--top-p", "--with-top-p", type=float, default=0.95)
     parser.add_argument("--base-url", default="http://127.0.0.1:58000/v1")
     parser.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
     parser.add_argument("--timeout", type=int, default=180)
-    parser.add_argument("--problems", nargs="*", help="Problem IDs; defaults to the full dataset")
+    problems = parser.add_mutually_exclusive_group()
+    problems.add_argument(
+        "--problems",
+        nargs="*",
+        help="Problem IDs; defaults to the full dataset",
+    )
+    problems.add_argument(
+        "--with-problems",
+        dest="problems_file",
+        type=Path,
+        help="File containing one problem ID per line",
+    )
     parser.add_argument("--run-root", type=Path)
     parser.add_argument(
         "--sandbox",
@@ -51,7 +73,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_problems(repo_root: Path, task: str, requested: Sequence[str]) -> List[str]:
+def load_problems(
+    repo_root: Path,
+    task: str,
+    requested: Sequence[str],
+    problems_file: Optional[Path] = None,
+) -> List[str]:
+    if problems_file is not None:
+        return [
+            line.strip()
+            for line in problems_file.read_text().splitlines()
+            if line.strip()
+        ]
     if requested:
         values: List[str] = []
         for item in requested:
@@ -122,7 +155,14 @@ def run_agent(
         task=args.task,
         problem=problem,
     )
-    write_agent_configs(workspace, args.base_url, args.model)
+    write_agent_configs(
+        workspace,
+        args.base_url,
+        args.model,
+        max_tokens=args.max_tokens,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
 
     request = AgentRequest(
         problem_id=problem,
@@ -296,6 +336,14 @@ def main() -> int:
         raise SystemExit("--jobs must be a positive integer")
     if args.timeout < 1:
         raise SystemExit("--timeout must be a positive integer")
+    if args.samples != 1:
+        raise SystemExit("Agent Pass@1 evaluation requires --with-samples=1")
+    if args.max_tokens < 1:
+        raise SystemExit("--with-max-tokens must be a positive integer")
+    if not 0 <= args.temperature <= 2:
+        raise SystemExit("--with-temperature must be between 0 and 2")
+    if not 0 < args.top_p <= 1:
+        raise SystemExit("--with-top-p must be greater than 0 and at most 1")
 
     if not args.dry_run:
         check_vllm(args.base_url)
@@ -318,7 +366,12 @@ def main() -> int:
         args.sandbox_backend = "bwrap" if args.sandbox == "auto" else args.sandbox
     print(f"Sandbox backend: {args.sandbox_backend}")
 
-    problems = load_problems(args.repo_root, args.task, args.problems or [])
+    problems = load_problems(
+        args.repo_root,
+        args.task,
+        args.problems or [],
+        args.problems_file,
+    )
     agents = ["pi", "opencode"] if args.agent == "all" else [args.agent]
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     run_root = (args.run_root or args.repo_root / "runs" / f"agent-eval-{timestamp}").resolve()
@@ -367,6 +420,9 @@ def main() -> int:
                 agent_results=agent_results,
                 jobs=args.jobs,
                 bash_path=os.environ["AGENT_EVAL_BASH"],
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                top_p=args.top_p,
             )
             canonical_grades[agent] = grades
             for problem, grade in grades.items():

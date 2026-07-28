@@ -186,22 +186,29 @@ opencode: 1/1 passed
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | `--agent` | `all` | `pi`、`opencode` 或 `all` |
-| `--task` | `spec-to-rtl` | `spec-to-rtl` 或 `code-complete-iccad2023` |
-| `--model` | `qwen3.6-coder` | 发送给两个 Agent 的模型 ID |
+| `--with-task`（兼容 `--task`） | `spec-to-rtl` | `spec-to-rtl` 或 `code-complete-iccad2023` |
+| `--with-model`（兼容 `--model`） | `qwen3.6-coder` | 发送给两个 Agent 的模型 ID |
+| `--with-samples` | `1` | Agent 正式评测固定为 Pass@1，只接受 `1` |
+| `--with-max-tokens` | `8192` | 每次模型响应的最大 token 数 |
+| `--with-temperature` | `0.6` | OpenCode 请求温度及 canonical 元数据 |
+| `--with-top-p` | `0.95` | OpenCode 请求 top-p 及 canonical 元数据 |
 | `--base-url` | `http://127.0.0.1:58000/v1` | OpenAI-compatible vLLM 地址 |
-| `--problems` | 全部题目 | 空格或逗号分隔的问题 ID |
+| `--with-problems` | 对应任务的全部题目 | 与直接 LLM 相同：包含题目 ID 的文件路径 |
+| `--problems` | 对应任务的全部题目 | Agent 便捷参数：空格或逗号分隔的问题 ID |
 | `--jobs` | 最多 16 | 并行轨迹数量 |
 | `--timeout` | `180` | 每个 Agent 轨迹的秒数上限 |
 | `--sandbox` | `auto` | `auto`、`bwrap` 或 `docker` |
 | `--run-root` | 自动生成 | 指定结果根目录 |
 | `--dry-run` | 关闭 | 只生成工作区和沙箱命令，不调用 Agent |
 
+Pi 0.82.1 没有公开的 temperature/top-p CLI 参数，因此 Pi 请求使用 vLLM 服务端采样默认值；运行 Pi 时必须确保传给评测器的 `--with-temperature` 和 `--with-top-p` 与 vLLM `--override-generation-config` 一致。OpenCode 会在请求中显式发送这两个值。
+
 测试 code-complete 数据集：
 
 ```bash
 ./scripts/agent-eval \
   --agent opencode \
-  --task code-complete-iccad2023 \
+  --with-task=code-complete-iccad2023 \
   --problems Prob001_zero \
   --jobs 1
 ```
@@ -279,9 +286,9 @@ Agent 状态与评分状态是两个不同层次。
 
 `completed` 不等于 `passed`。它只表示 Agent 正常提交了文件；最终正确性必须查看原版 `grade.symbol`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时 Agent 状态是 `missing_submission`，监督器会放入明确的无提交占位样本，让原版流程产生失败符号，同时保留真实 Agent 状态。
 
-正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 的 build agent 固定使用 `temperature=0.6`、`top_p=0.95`，与本项目 vLLM 的 `--override-generation-config` 一致；公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。OpenCode 在 API 请求中显式发送的采样参数优先于 vLLM 默认值，因此两处配置必须保持一致。
+正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 默认使用 `--with-temperature=0.6`、`--with-top-p=0.95`；公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。OpenCode 在 API 请求中显式发送的采样参数优先于 vLLM 默认值，因此 Agent、model-only 和服务端三处配置必须保持一致。
 
-现有 model-only 低温基线使用 `temperature=0`、`top_p=0.01`，不能与上述 Agent 结果直接做严格归因比较。若要比较 model-only 与 Agent，应使用 `--with-temperature=0.6 --with-top-p=0.95` 重新生成同采样配置的 model-only 基线，或将低温 Agent 的工具协议失败单独作为兼容性结果报告。
+现有 model-only 低温基线使用 `temperature=0`、`top_p=0.01`，不能与上述 Agent 结果直接做严格归因比较。比较时应给两个入口传入相同的 `--with-temperature`、`--with-top-p` 和 `--with-max-tokens`，或将不同配置的结果分开报告。
 
 测试命令的退出码主要表示监督器是否完成所有轨迹，不表示所有题目都通过。通过率应读取 `summary.csv` 或终端中的 `x/y passed`。
 

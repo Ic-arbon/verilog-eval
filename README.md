@@ -88,7 +88,10 @@ The agent harness can evaluate Pi and OpenCode against the same local model.
 Start with one problem:
 
 ```sh
-./scripts/agent-eval --agent all --problems Prob001_zero
+./scripts/agent-eval \
+  --agent all \
+  --with-task=spec-to-rtl \
+  --problems Prob001_zero
 ```
 
 Run one agent or the full dataset with:
@@ -108,6 +111,13 @@ stages `TopModule.sv` through VerilogEval's `--with-pregen` path and reuses the
 original Makefile, iverilog rules, and `sv-iv-analyze`. Commands, raw JSONL
 trajectories, agent metrics, and canonical summaries are written under
 `runs/agent-eval-*`.
+
+Generation settings accept the same configure-style names as model-only runs:
+`--with-task`, `--with-model`, `--with-problems`, `--with-samples`,
+`--with-max-tokens`, `--with-temperature`, and `--with-top-p`. The older
+`--task` and `--model` spellings remain compatible. Agent Pass@1 requires
+`--with-samples=1`; `--with-problems` names a problem-list file, while
+`--problems` remains a convenience for passing problem IDs directly.
 
 Defaults are 16 parallel trajectories and a 180-second timeout per problem.
 Override them with `--jobs` and `--timeout`. At least one supported sandbox

@@ -2,7 +2,14 @@ import json
 from pathlib import Path
 
 
-def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
+def write_agent_configs(
+    workspace: Path,
+    base_url: str,
+    model: str,
+    max_tokens: int = 8192,
+    temperature: float = 0.6,
+    top_p: float = 0.95,
+) -> None:
     pi_dir = workspace / ".pi-agent"
     pi_dir.mkdir(parents=True, exist_ok=True)
 
@@ -24,7 +31,7 @@ def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
                         "name": model,
                         "reasoning": True,
                         "contextWindow": 262144,
-                        "maxTokens": 8192,
+                        "maxTokens": max_tokens,
                         "cost": {
                             "input": 0,
                             "output": 0,
@@ -42,8 +49,8 @@ def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
         "$schema": "https://opencode.ai/config.json",
         "agent": {
             "build": {
-                "temperature": 0.6,
-                "top_p": 0.95,
+                "temperature": temperature,
+                "top_p": top_p,
                 "steps": 20,
             }
         },
@@ -56,7 +63,7 @@ def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
                     model: {
                         "name": model,
                         "tool_call": True,
-                        "limit": {"context": 262144, "output": 8192},
+                        "limit": {"context": 262144, "output": max_tokens},
                     }
                 },
             }
