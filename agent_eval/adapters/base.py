@@ -5,9 +5,11 @@ from agent_eval.models import AgentRequest
 
 
 TASK_PROMPT = (
-    "Read TASK.md and AGENT_INSTRUCTIONS.md. Implement the task completely, "
-    "use the available tools to compile and self-test it, and leave the final "
-    "answer in /workspace/TopModule.sv."
+    "Do not narrate or announce planned actions. Start immediately by calling "
+    "the read tool on TASK.md and AGENT_INSTRUCTIONS.md. Then implement the task "
+    "completely, use tools to compile and self-test it, and continue until "
+    "/workspace/TopModule.sv exists and compiles. A text-only response before "
+    "TopModule.sv exists is a failure."
 )
 
 

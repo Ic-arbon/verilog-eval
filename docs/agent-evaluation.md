@@ -262,7 +262,9 @@ Agent 状态与评分状态是两个不同层次。
 | `timeout` | 隐藏仿真超时 |
 | `missing_submission` | 没有可评分的 `TopModule.sv` |
 
-`completed` 不等于 `passed`。它只表示 Agent 执行正常；最终正确性必须查看 `grade.status` 和 `passed`。
+`completed` 不等于 `passed`。它只表示 Agent 执行正常；最终正确性必须查看 `grade.status` 和 `passed`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时没有 `TopModule.sv`，结果按 `missing_submission` 计为失败。
+
+正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 的 build agent 固定使用 `temperature=0`、`top_p=0.01`，公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。
 
 测试命令的退出码主要表示监督器是否完成所有轨迹，不表示所有题目都通过。通过率应读取 `summary.csv` 或终端中的 `x/y passed`。
 
