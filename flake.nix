@@ -11,6 +11,7 @@
 
       pythonRequirements = pkgs.writeText "verilog-eval-requirements.txt" ''
         langchain==0.2.17
+        langchain-community==0.2.19
         langchain-openai==0.1.25
         langchain-nvidia-ai-endpoints==0.2.2
         pandas==2.2.3
@@ -37,7 +38,7 @@
             --requirements ${pythonRequirements}
 
           "$venv/bin/python" -c \
-            "import langchain, langchain_openai, langchain_nvidia_ai_endpoints, pandas"
+            "import langchain, langchain_community, langchain_openai, langchain_nvidia_ai_endpoints, pandas"
           echo "Python dependencies are ready in $venv"
         '';
       };
