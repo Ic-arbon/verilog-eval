@@ -110,7 +110,12 @@ to a read-only, capability-free Docker container. Use `--sandbox bwrap` or
 stages `TopModule.sv` through VerilogEval's `--with-pregen` path and reuses the
 original Makefile, iverilog rules, and `sv-iv-analyze`. Commands, raw JSONL
 trajectories, agent metrics, and canonical summaries are written under
-`runs/agent-eval-*`.
+`runs/agent-eval-*`. Summarize a completed run as text or JSON with:
+
+```sh
+./scripts/agent-eval-stats runs/agent-eval-<timestamp>
+./scripts/agent-eval-stats --json runs/agent-eval-<timestamp> > stats.json
+```
 
 Generation settings accept the same configure-style names as model-only runs:
 `--with-task`, `--with-model`, `--with-problems`, `--with-samples`,
