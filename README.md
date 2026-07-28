@@ -22,7 +22,26 @@ MachineEval is not supported in VerilogEvalV2, only the Human Eval problem state
 
 ### Setup Linux Environment
 
-In order to use PyHDL-Eval you will need to install iverilog, verilator,
+A pinned Nix flake is provided for the `x86_64-linux` EDA test environment.
+Enter it with:
+
+```sh
+nix develop --accept-flake-config
+```
+
+The flag enables the FOSSi Foundation binary cache declared by the flake, so
+the LibreLane EDA dependencies do not need to be built from source. The lock
+file pins both nixpkgs and LibreLane for reproducible environments.
+
+To verify the core tools:
+
+```sh
+iverilog -V
+verilator --version
+python3 --version
+```
+
+For a non-Nix setup, you will need to install iverilog, verilator,
 and python3 along with several Python packages. These are the versions
 which were used for this project:
 
