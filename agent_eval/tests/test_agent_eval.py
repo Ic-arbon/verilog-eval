@@ -7,10 +7,15 @@ from pathlib import Path
 from unittest.mock import patch
 
 from agent_eval.adapters import create_adapter
+from agent_eval.canonical import (
+    canonical_commands,
+    parse_verilog_eval_summary,
+    stage_agent_result,
+)
 from agent_eval.config import write_agent_configs
 from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
-from agent_eval.models import AgentRequest
+from agent_eval.models import AgentRequest, AgentResult, TrajectoryMetrics
 from agent_eval.runner import sandbox_environment
 from agent_eval.sandbox import (
     build_docker_command,
@@ -202,6 +207,98 @@ class SandboxTests(unittest.TestCase):
             command[-3:],
             ["/agent-tools/node_modules/.bin/pi", "--mode", "json"],
         )
+
+
+class CanonicalEvaluationTests(unittest.TestCase):
+    def test_agent_result_is_staged_as_original_pregen_sample(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "TopModule.sv"
+            candidate.write_text("module TopModule(output zero); assign zero=0; endmodule")
+            result = AgentResult(
+                agent="opencode",
+                status="completed",
+                exit_code=0,
+                final_sv=candidate,
+                trajectory=root / "trajectory.jsonl",
+                stderr_log=root / "stderr.log",
+                duration_seconds=1.0,
+                metrics=TrajectoryMetrics(
+                    turns=2,
+                    tool_calls=3,
+                    input_tokens=120,
+                    output_tokens=30,
+                ),
+            )
+
+            sample, generate_log = stage_agent_result(
+                pregen_root=root / "pregen",
+                problem="Prob001_zero",
+                result=result,
+            )
+
+            self.assertEqual(
+                sample.name,
+                "Prob001_zero_sample01.sv",
+            )
+            self.assertEqual(sample.read_text(), candidate.read_text())
+            self.assertIn("prompt_tokens = 120", generate_log.read_text())
+            self.assertIn("resp_tokens = 30", generate_log.read_text())
+            self.assertIn("agent_status = completed", generate_log.read_text())
+
+    def test_missing_submission_stages_compile_failure_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            result = AgentResult(
+                agent="opencode",
+                status="missing_submission",
+                exit_code=0,
+                final_sv=None,
+                trajectory=root / "trajectory.jsonl",
+                stderr_log=root / "stderr.log",
+                duration_seconds=1.0,
+                metrics=TrajectoryMetrics(),
+            )
+
+            sample, _ = stage_agent_result(
+                pregen_root=root / "pregen",
+                problem="Prob001_zero",
+                result=result,
+            )
+
+            self.assertIn("AGENT_EVAL_NO_SUBMISSION", sample.read_text())
+
+    def test_original_summary_symbols_are_parsed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary = root / "summary.csv"
+            summary.write_text(
+                "Prob001_zero,1,1,1.0,.\n"
+                "Prob002_m2014_q4i,0,1,0.0,m\n"
+            )
+
+            results = parse_verilog_eval_summary(summary, root)
+
+            self.assertTrue(results["Prob001_zero"].passed)
+            self.assertEqual(results["Prob001_zero"].symbol, ".")
+            self.assertFalse(results["Prob002_m2014_q4i"].passed)
+            self.assertEqual(results["Prob002_m2014_q4i"].symbol, "m")
+
+    def test_canonical_commands_use_pregen_and_original_analyzer(self):
+        configure, make = canonical_commands(
+            repo_root=Path("/repo"),
+            build_dir=Path("/run/build"),
+            pregen_root=Path("/run/pregen"),
+            problems_file=Path("/run/problems.txt"),
+            task="spec-to-rtl",
+            jobs=2,
+            bash_path="/nix/store/bash/bin/bash",
+        )
+
+        self.assertIn("--with-pregen=/run/pregen", configure)
+        self.assertIn("--with-problems=/run/problems.txt", configure)
+        self.assertIn("sv-iv-analyze", make)
+        self.assertIn("--jobs=2", make)
 
 
 class GraderTests(unittest.TestCase):
