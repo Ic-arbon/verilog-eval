@@ -27,11 +27,17 @@ Enter it with:
 
 ```sh
 nix develop
+verilog-eval-setup
 ```
 
-The shell contains the Verilog simulators, Python 3.11, and GNU command-line
-tools used by the evaluation harness. The lock file pins nixpkgs for a
-reproducible environment.
+`verilog-eval-setup` creates `.venv` and installs the Python dependencies at
+versions compatible with this harness. The development shell automatically
+adds that environment to `PATH`, so no manual `uv` command or activation step
+is needed. The command is idempotent and can be rerun after dependency changes.
+
+The shell also contains the Verilog simulators, Python 3.11, and GNU
+command-line tools used by the evaluation harness. The lock file pins nixpkgs
+for a reproducible base environment.
 
 To verify the core tools:
 
