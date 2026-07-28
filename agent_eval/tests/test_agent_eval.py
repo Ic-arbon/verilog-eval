@@ -17,13 +17,52 @@ from agent_eval.canonical import (
 from agent_eval.config import write_agent_configs
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest, AgentResult, TrajectoryMetrics
-from agent_eval.runner import sandbox_environment
+from agent_eval.runner import load_problems, parse_args, sandbox_environment
 from agent_eval.sandbox import (
     build_docker_command,
     build_sandbox_command,
     select_sandbox_backend,
 )
 from agent_eval.workspace import prepare_workspace
+
+
+class CliTests(unittest.TestCase):
+    def test_configure_style_options_map_to_agent_settings(self):
+        argv = [
+            "agent-eval",
+            "--with-task=code-complete-iccad2023",
+            "--with-model=qwen3.6-coder",
+            "--with-samples=1",
+            "--with-max-tokens=4096",
+            "--with-temperature=0.2",
+            "--with-top-p=0.8",
+            "--with-problems=/tmp/problems.txt",
+        ]
+        with patch.object(sys, "argv", argv):
+            args = parse_args()
+
+        self.assertEqual(args.task, "code-complete-iccad2023")
+        self.assertEqual(args.model, "qwen3.6-coder")
+        self.assertEqual(args.samples, 1)
+        self.assertEqual(args.max_tokens, 4096)
+        self.assertEqual(args.temperature, 0.2)
+        self.assertEqual(args.top_p, 0.8)
+        self.assertEqual(args.problems_file, Path("/tmp/problems.txt"))
+
+    def test_with_problems_reads_the_same_problem_file_as_configure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            problems_file = root / "problems.txt"
+            problems_file.write_text("Prob001_zero\nProb002_m2014_q4i\n")
+
+            problems = load_problems(
+                repo_root=root,
+                task="spec-to-rtl",
+                requested=[],
+                problems_file=problems_file,
+            )
+
+        self.assertEqual(problems, ["Prob001_zero", "Prob002_m2014_q4i"])
 
 
 class WorkspaceTests(unittest.TestCase):
