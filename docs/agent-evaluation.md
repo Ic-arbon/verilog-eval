@@ -191,6 +191,13 @@ Agent 行为读取：
 
 `timeout` 时如果已经写出 `TopModule.sv`，candidate 仍会进入原版评分，同时 `agent.json` 保留 `status=timeout`。
 
+生成汇总统计：
+
+```bash
+./scripts/agent-eval-stats runs/agent-eval-<UTC>
+./scripts/agent-eval-stats --json runs/agent-eval-<UTC> > stats.json
+```
+
 ## 7. 隔离
 
 Agent 沙箱只挂载该 sample 的 `/workspace` 和只读 Agent 工具目录。隐藏数据集不挂载。Docker 使用：
