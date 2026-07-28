@@ -103,9 +103,11 @@ Each trajectory runs in an isolated task workspace; reference solutions and
 hidden testbenches are not visible to the agent. The default `--sandbox auto`
 uses Bubblewrap when unprivileged user namespaces work and otherwise falls back
 to a read-only, capability-free Docker container. Use `--sandbox bwrap` or
-`--sandbox docker` to require one backend. The supervisor grades `TopModule.sv`
-after the agent exits and writes commands, raw JSONL trajectories, logs,
-metrics, and summaries under `runs/agent-eval-*`.
+`--sandbox docker` to require one backend. After the agent exits, the supervisor
+stages `TopModule.sv` through VerilogEval's `--with-pregen` path and reuses the
+original Makefile, iverilog rules, and `sv-iv-analyze`. Commands, raw JSONL
+trajectories, agent metrics, and canonical summaries are written under
+`runs/agent-eval-*`.
 
 Defaults are 16 parallel trajectories and a 180-second timeout per problem.
 Override them with `--jobs` and `--timeout`. At least one supported sandbox

@@ -26,7 +26,7 @@ Agent 自己创建的测试文件
 Agent 配置和缓存目录
 ```
 
-Agent 看不到数据集仓库中的 `*_ref.sv` 和 `*_test.sv`。Agent 退出后，宿主监督器才会使用隐藏文件编译和仿真 `TopModule.sv`。
+Agent 看不到数据集仓库中的 `*_ref.sv` 和 `*_test.sv`。Agent 退出后，宿主监督器把 `TopModule.sv` 转换为 VerilogEval pregen 样本，再调用原版 Makefile、iverilog 规则和 `sv-iv-analyze` 使用隐藏文件评分。Agent 与 model-only 因此共享同一套正确性诊断。
 
 默认隔离模式为 `--sandbox auto`：
 
@@ -215,13 +215,19 @@ runs/agent-eval-<UTC时间>/
 ├── summary.csv
 ├── summary.json
 └── <agent>/
+    ├── verilog-eval/
+    │   ├── summary.csv
+    │   ├── summary.txt
+    │   ├── configure.log
+    │   ├── make.log
+    │   ├── pregen/
+    │   └── build/
     └── <problem>/
         ├── command.json
         ├── trajectory.jsonl
         ├── stderr.log
         ├── grade.log
         ├── metrics.json
-        ├── simulation
         └── workspace/
             ├── TASK.md
             ├── AGENT_INSTRUCTIONS.md
@@ -231,12 +237,14 @@ runs/agent-eval-<UTC时间>/
 
 主要文件：
 
-- `summary.csv`：适合表格分析和 Agent 间比较；
-- `summary.json`：整次运行的结构化结果；
+- 顶层 `summary.csv`：Agent 状态、工具指标和原版评分符号的扩展汇总；
+- 顶层 `summary.json`：整次运行的结构化结果；
+- `<agent>/verilog-eval/summary.csv`：原版 `sv-iv-analyze` 输出，可与 model-only 直接比较；
+- `<agent>/verilog-eval/summary.txt`：原版终端诊断和通过率；
 - `metrics.json`：单题 Agent 状态、评分状态、耗时、token 和工具调用；
 - `trajectory.jsonl`：Agent 的原始 JSONL 事件；
 - `stderr.log`：Agent 或沙箱启动错误；
-- `grade.log`：隐藏评分器的编译和仿真输出；
+- `grade.log`：从原版 VerilogEval build 复制的逐题编译和仿真日志；
 - `command.json`：实际执行的沙箱命令，用于复现启动问题；
 - `workspace/TopModule.sv`：Agent 最终提交。
 
@@ -254,17 +262,22 @@ Agent 状态与评分状态是两个不同层次。
 | `missing_submission` | Agent 正常结束但没有生成 `TopModule.sv` |
 | `dry_run` | 只生成命令，没有执行 Agent |
 
-### 评分状态
+### 原版 VerilogEval 评分
 
-| 状态 | 含义 |
+`grade.status` 只表示 `passed` 或 `failed`；详细原因使用原版 `sv-iv-analyze` 符号，记录在 `grade.symbol` 和顶层 `verilog_eval_symbol`：
+
+| 符号 | 含义 |
 | --- | --- |
-| `passed` | 隐藏测试输出零 mismatch |
-| `failed` | 仿真完成但存在 mismatch |
-| `compile_error` | 候选代码与隐藏测试无法编译 |
-| `timeout` | 隐藏仿真超时 |
-| `missing_submission` | 没有可评分的 `TopModule.sv` |
+| `.` | 隐藏测试通过，零 mismatch |
+| `S` | Verilog 语法错误 |
+| `C` | 一般编译错误 |
+| `p` | 端口或信号绑定错误 |
+| `m` | 模块类型错误或缺失 |
+| `T` | 仿真超时 |
+| `R` | 运行时失败或存在 mismatch |
+| 其他 | 保留原版 analyzer 的细分诊断符号 |
 
-`completed` 不等于 `passed`。它只表示 Agent 执行正常；最终正确性必须查看 `grade.status` 和 `passed`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时没有 `TopModule.sv`，结果按 `missing_submission` 计为失败。
+`completed` 不等于 `passed`。它只表示 Agent 正常提交了文件；最终正确性必须查看原版 `grade.symbol`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时 Agent 状态是 `missing_submission`，监督器会放入明确的无提交占位样本，让原版流程产生失败符号，同时保留真实 Agent 状态。
 
 正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 的 build agent 固定使用 `temperature=0.6`、`top_p=0.95`，与本项目 vLLM 的 `--override-generation-config` 一致；公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。OpenCode 在 API 请求中显式发送的采样参数优先于 vLLM 默认值，因此两处配置必须保持一致。
 

@@ -16,8 +16,8 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from agent_eval.adapters import create_adapter
+from agent_eval.canonical import VerilogEvalResult, run_canonical_evaluation
 from agent_eval.config import write_agent_configs
-from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest, AgentResult
 from agent_eval.sandbox import (
@@ -114,7 +114,7 @@ def run_agent(
     args: argparse.Namespace,
     run_root: Path,
     store_paths: Sequence[Path],
-) -> Tuple[AgentResult, object]:
+) -> AgentResult:
     problem_root = run_root / agent / problem
     workspace = prepare_workspace(
         repo_root=args.repo_root,
@@ -219,29 +219,49 @@ def run_agent(
             metrics=parse_trajectory(agent, lines),
         )
 
-    dataset = args.repo_root / f"dataset_{args.task}"
-    grade = grade_submission(
-        candidate=workspace / "TopModule.sv",
-        reference=dataset / f"{problem}_ref.sv",
-        testbench=dataset / f"{problem}_test.sv",
-        output_dir=problem_root,
-    ) if not args.dry_run else None
-
     record = result.to_dict()
     record["problem"] = problem
     record["sandbox"] = args.sandbox_backend
-    record["grade"] = grade.to_dict() if grade else None
+    record["grade"] = None
     (problem_root / "metrics.json").write_text(json.dumps(record, indent=2) + "\n")
-    return result, grade
+    return result
+
+
+def attach_canonical_grade(
+    run_root: Path,
+    agent: str,
+    problem: str,
+    grade: VerilogEvalResult,
+) -> None:
+    problem_root = run_root / agent / problem
+    metrics_path = problem_root / "metrics.json"
+    record = json.loads(metrics_path.read_text())
+    grade_log = problem_root / "grade.log"
+    grade_log.write_text(grade.compile_log.read_text())
+    record["grade"] = {
+        "source": "verilog-eval/sv-iv-analyze",
+        "status": grade.status,
+        "passed": grade.passed,
+        "symbol": grade.symbol,
+        "num_passed": grade.num_passed,
+        "num_samples": grade.num_samples,
+        "pass_rate": grade.pass_rate,
+        "compile_log": str(grade.compile_log),
+        "canonical_candidate": str(grade.candidate),
+        "log_path": str(grade_log),
+    }
+    metrics_path.write_text(json.dumps(record, indent=2) + "\n")
 
 
 def write_summary(
     run_root: Path,
-    records: List[Tuple[str, str, AgentResult, object]],
+    records: List[Tuple[str, str, AgentResult]],
+    grades: Dict[str, Dict[str, VerilogEvalResult]],
     sandbox_backend: str,
 ) -> None:
     summary = []
-    for agent, problem, result, grade in sorted(records):
+    for agent, problem, result in sorted(records):
+        grade = grades.get(agent, {}).get(problem)
         summary.append(
             {
                 "agent": agent,
@@ -249,7 +269,8 @@ def write_summary(
                 "agent_status": result.status,
                 "sandbox": sandbox_backend,
                 "passed": bool(grade and grade.passed),
-                "grade_status": grade.status if grade else "dry_run",
+                "grade_status": grade.status if grade else "not_graded",
+                "verilog_eval_symbol": grade.symbol if grade else "",
                 "duration_seconds": round(result.duration_seconds, 3),
                 **result.metrics.to_dict(),
             }
@@ -311,7 +332,7 @@ def main() -> int:
     work = [(agent, problem) for agent in agents for problem in problems]
     print(f"Running {len(work)} trajectories with {args.jobs} parallel jobs")
 
-    records: List[Tuple[str, str, AgentResult, object]] = []
+    records: List[Tuple[str, str, AgentResult]] = []
     with ThreadPoolExecutor(max_workers=args.jobs) as executor:
         futures = {
             executor.submit(run_agent, agent, problem, args, run_root, store_paths): (agent, problem)
@@ -320,15 +341,52 @@ def main() -> int:
         for future in as_completed(futures):
             agent, problem = futures[future]
             try:
-                result, grade = future.result()
-                records.append((agent, problem, result, grade))
-                outcome = "PASS" if grade and grade.passed else result.status
-                print(f"[{agent}] {problem}: {outcome}")
+                result = future.result()
+                records.append((agent, problem, result))
+                print(f"[{agent}] {problem}: agent {result.status}")
             except Exception as error:
                 print(f"[{agent}] {problem}: ERROR: {error}", file=sys.stderr)
 
-    write_summary(run_root, records, args.sandbox_backend)
-    return 0 if len(records) == len(work) else 1
+    if len(records) != len(work):
+        write_summary(run_root, records, {}, args.sandbox_backend)
+        return 1
+
+    canonical_grades: Dict[str, Dict[str, VerilogEvalResult]] = {}
+    if not args.dry_run:
+        for agent in agents:
+            agent_results = {
+                problem: result
+                for record_agent, problem, result in records
+                if record_agent == agent
+            }
+            grades, canonical_root = run_canonical_evaluation(
+                repo_root=args.repo_root,
+                agent_root=run_root / agent,
+                task=args.task,
+                problems=problems,
+                agent_results=agent_results,
+                jobs=args.jobs,
+                bash_path=os.environ["AGENT_EVAL_BASH"],
+            )
+            canonical_grades[agent] = grades
+            for problem, grade in grades.items():
+                attach_canonical_grade(run_root, agent, problem, grade)
+                if grade.passed:
+                    outcome = "PASS"
+                elif agent_results[problem].status != "completed":
+                    outcome = (
+                        f"{agent_results[problem].status} "
+                        f"(VerilogEval {grade.symbol})"
+                    )
+                else:
+                    outcome = f"FAIL (VerilogEval {grade.symbol})"
+                print(f"[{agent}] {problem}: {outcome}")
+
+            print(f"\nCanonical VerilogEval results ({agent}):")
+            print((canonical_root / "summary.txt").read_text(), end="")
+
+    write_summary(run_root, records, canonical_grades, args.sandbox_backend)
+    return 0
 
 
 if __name__ == "__main__":

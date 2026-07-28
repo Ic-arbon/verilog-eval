@@ -40,17 +40,3 @@ class AgentResult:
         data["trajectory"] = str(self.trajectory)
         data["stderr_log"] = str(self.stderr_log)
         return data
-
-
-@dataclass
-class GradeResult:
-    status: str
-    passed: bool
-    compile_exit_code: Optional[int] = None
-    simulation_exit_code: Optional[int] = None
-    log_path: Optional[Path] = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data["log_path"] = str(self.log_path) if self.log_path else None
-        return data

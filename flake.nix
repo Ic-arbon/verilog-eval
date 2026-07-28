@@ -196,7 +196,12 @@
           docker_29
           nix
           iverilog
+          gnumake
+          gitMinimal
           coreutils
+          util-linux
+          gnugrep
+          gnused
           bash
         ];
         text = ''

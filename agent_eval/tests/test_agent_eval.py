@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,10 +11,10 @@ from agent_eval.adapters import create_adapter
 from agent_eval.canonical import (
     canonical_commands,
     parse_verilog_eval_summary,
+    run_canonical_evaluation,
     stage_agent_result,
 )
 from agent_eval.config import write_agent_configs
-from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest, AgentResult, TrajectoryMetrics
 from agent_eval.runner import sandbox_environment
@@ -268,6 +269,40 @@ class CanonicalEvaluationTests(unittest.TestCase):
 
             self.assertIn("AGENT_EVAL_NO_SUBMISSION", sample.read_text())
 
+    def test_original_analyzer_handles_python3_sample_numbers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            problem_dir = root / "Prob001_zero"
+            problem_dir.mkdir()
+            (problem_dir / "Prob001_zero_sample01-sv-generate.log").write_text(
+                "prompt_tokens = 10\nresp_tokens = 5\ncost = 0.0\n"
+            )
+            (problem_dir / "Prob001_zero_sample01-sv-iv-test.log").write_text(
+                "Mismatches: 0 in 20 samples\n"
+            )
+            (problem_dir / "Prob001_zero_sample01.sv").write_text(
+                "module TopModule; endmodule\n"
+            )
+            repo_root = Path(__file__).resolve().parents[2]
+
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_root / "scripts/sv-iv-analyze"),
+                    "--csv=summary.csv",
+                    "Prob001_zero",
+                ],
+                cwd=root,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertEqual(
+                (root / "summary.csv").read_text(),
+                "Prob001_zero,1,1,1.0,.\n",
+            )
+
     def test_original_summary_symbols_are_parsed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -284,6 +319,48 @@ class CanonicalEvaluationTests(unittest.TestCase):
             self.assertFalse(results["Prob002_m2014_q4i"].passed)
             self.assertEqual(results["Prob002_m2014_q4i"].symbol, "m")
 
+    def test_canonical_runner_publishes_original_summaries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            candidate = root / "TopModule.sv"
+            candidate.write_text("module TopModule(output zero); endmodule")
+            result = AgentResult(
+                agent="opencode",
+                status="completed",
+                exit_code=0,
+                final_sv=candidate,
+                trajectory=root / "trajectory.jsonl",
+                stderr_log=root / "stderr.log",
+                duration_seconds=1.0,
+                metrics=TrajectoryMetrics(),
+            )
+            calls = []
+
+            def fake_run(command, cwd, **_kwargs):
+                calls.append(command)
+                if "sv-iv-analyze" in command:
+                    (cwd / "summary.csv").write_text(
+                        "Prob001_zero,1,1,1.0,.\n"
+                    )
+                    (cwd / "summary.txt").write_text("pass_rate = 100.00\n")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            grades, canonical_root = run_canonical_evaluation(
+                repo_root=Path("/repo"),
+                agent_root=root / "opencode",
+                task="spec-to-rtl",
+                problems=["Prob001_zero"],
+                agent_results={"Prob001_zero": result},
+                jobs=1,
+                bash_path="/nix/store/bash/bin/bash",
+                run=fake_run,
+            )
+
+            self.assertTrue(grades["Prob001_zero"].passed)
+            self.assertTrue((canonical_root / "summary.csv").is_file())
+            self.assertTrue((canonical_root / "summary.txt").is_file())
+            self.assertEqual(len(calls), 2)
+
     def test_canonical_commands_use_pregen_and_original_analyzer(self):
         configure, make = canonical_commands(
             repo_root=Path("/repo"),
@@ -299,51 +376,6 @@ class CanonicalEvaluationTests(unittest.TestCase):
         self.assertIn("--with-problems=/run/problems.txt", configure)
         self.assertIn("sv-iv-analyze", make)
         self.assertIn("--jobs=2", make)
-
-
-class GraderTests(unittest.TestCase):
-    def test_passing_simulation_is_reported(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for name in ("TopModule.sv", "ref.sv", "test.sv"):
-                (root / name).write_text("module placeholder; endmodule")
-
-            grader_environments = []
-
-            def fake_run(command, **kwargs):
-                grader_environments.append(kwargs["env"])
-                if command[0] == "iverilog":
-                    return subprocess.CompletedProcess(command, 0, "", "")
-                return subprocess.CompletedProcess(
-                    command, 0, "Mismatches: 0 in 10 samples\n", ""
-                )
-
-            with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/poisoned/glibc"}):
-                result = grade_submission(
-                    candidate=root / "TopModule.sv",
-                    reference=root / "ref.sv",
-                    testbench=root / "test.sv",
-                    output_dir=root / "grade",
-                    run=fake_run,
-                )
-
-            self.assertTrue(result.passed)
-            self.assertEqual(result.status, "passed")
-            self.assertTrue(grader_environments)
-            self.assertTrue(
-                all("LD_LIBRARY_PATH" not in env for env in grader_environments)
-            )
-
-    def test_missing_submission_is_reported_without_running_tools(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            result = grade_submission(
-                candidate=Path(tmp) / "TopModule.sv",
-                reference=Path(tmp) / "ref.sv",
-                testbench=Path(tmp) / "test.sv",
-                output_dir=Path(tmp),
-            )
-            self.assertEqual(result.status, "missing_submission")
-            self.assertFalse(result.passed)
 
 
 class MetricsTests(unittest.TestCase):
