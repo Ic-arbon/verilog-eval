@@ -7,7 +7,11 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc ];
+      runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+      agentRuntimeLibraryPath = pkgs.lib.makeLibraryPath [
+        pkgs.stdenv.cc.cc.lib
+        pkgs.glibc
+      ];
 
       agentSandboxPackages = with pkgs; [
         nodejs_22
@@ -218,6 +222,7 @@
           export AGENT_EVAL_ENV=${pkgs.coreutils}/bin/env
           export AGENT_EVAL_SANDBOX_PATH="/agent-tools/node_modules/.bin:${agentSandboxPath}"
           export AGENT_EVAL_STORE_ROOTS="${agentStoreRoots}"
+          export AGENT_EVAL_SANDBOX_LD_LIBRARY_PATH="${agentRuntimeLibraryPath}"
           export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
           export PYTHONPATH=${./.}
 

@@ -98,7 +98,10 @@ def sandbox_environment(agent: str) -> Dict[str, str]:
         "npm_config_cache": "/workspace/.cache/npm",
         "PI_OFFLINE": "1",
         "PI_TELEMETRY": "0",
-        "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
+        "LD_LIBRARY_PATH": os.environ.get(
+            "AGENT_EVAL_SANDBOX_LD_LIBRARY_PATH",
+            os.environ.get("LD_LIBRARY_PATH", ""),
+        ),
     }
     if agent == "pi":
         environment["PI_CODING_AGENT_DIR"] = "/workspace/.pi-agent"

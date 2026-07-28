@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -25,6 +26,10 @@ def grade_submission(
             status="missing_submission", passed=False, log_path=log_path
         )
 
+    grader_environment = os.environ.copy()
+    grader_environment.pop("LD_LIBRARY_PATH", None)
+    grader_environment.pop("LD_PRELOAD", None)
+
     simulation = output_dir / "simulation"
     compile_result = run(
         [
@@ -44,6 +49,7 @@ def grade_submission(
         capture_output=True,
         text=True,
         timeout=timeout_seconds,
+        env=grader_environment,
     )
     compile_output = (compile_result.stdout or "") + (compile_result.stderr or "")
     if compile_result.returncode != 0:
@@ -61,6 +67,7 @@ def grade_submission(
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
+            env=grader_environment,
         )
         simulation_output = (simulation_result.stdout or "") + (
             simulation_result.stderr or ""

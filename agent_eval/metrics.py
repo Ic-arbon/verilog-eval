@@ -42,6 +42,9 @@ def parse_trajectory(agent: str, lines: Iterable[str]) -> TrajectoryMetrics:
             ):
                 metrics.tool_calls += 1
             usage = event.get("usage")
+            part = event.get("part")
+            if not isinstance(usage, dict) and isinstance(part, dict):
+                usage = part.get("tokens")
             if isinstance(usage, dict):
                 metrics.input_tokens += int(usage.get("input", 0) or 0)
                 metrics.output_tokens += int(usage.get("output", 0) or 0)
