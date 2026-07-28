@@ -9,7 +9,11 @@ from agent_eval.config import write_agent_configs
 from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest
-from agent_eval.sandbox import build_sandbox_command
+from agent_eval.sandbox import (
+    build_docker_command,
+    build_sandbox_command,
+    select_sandbox_backend,
+)
 from agent_eval.workspace import prepare_workspace
 
 
@@ -90,6 +94,65 @@ class ConfigTests(unittest.TestCase):
 
 
 class SandboxTests(unittest.TestCase):
+    def test_auto_backend_falls_back_to_docker(self):
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            return subprocess.CompletedProcess(
+                command,
+                1 if "bwrap" in command[0] else 0,
+                "",
+                "uid map denied" if "bwrap" in command[0] else "",
+            )
+
+        backend = select_sandbox_backend(
+            requested="auto",
+            bwrap_path="/nix/store/bwrap/bin/bwrap",
+            docker_path="docker",
+            true_path="/nix/store/coreutils/bin/true",
+            run=fake_run,
+        )
+
+        self.assertEqual(backend, "docker")
+        self.assertEqual(len(calls), 2)
+
+    def test_unavailable_backends_fail_before_trajectories_start(self):
+        def fake_run(command, **_kwargs):
+            return subprocess.CompletedProcess(command, 1, "", "denied")
+
+        with self.assertRaisesRegex(RuntimeError, "No usable sandbox backend"):
+            select_sandbox_backend(
+                requested="auto",
+                bwrap_path="bwrap",
+                docker_path="docker",
+                true_path="true",
+                run=fake_run,
+            )
+
+    def test_docker_command_is_read_only_and_drops_privileges(self):
+        command = build_docker_command(
+            workspace=Path("/run/workspace"),
+            agent_tools=Path("/run/agent-tools"),
+            agent_command=["/agent-tools/node_modules/.bin/opencode", "run"],
+            image="verilog-eval-agent-sandbox:1",
+            sandbox_path="/agent-tools/node_modules/.bin:/nix/store/tools/bin",
+            environment={"HOME": "/home/agent"},
+            docker_path="docker",
+            uid=1000,
+            gid=1000,
+        )
+
+        joined = " ".join(command)
+        self.assertIn("--read-only", command)
+        self.assertIn("--cap-drop ALL", joined)
+        self.assertIn("--security-opt no-new-privileges", joined)
+        self.assertIn("--network host", joined)
+        self.assertIn("/run/workspace:/workspace:rw", joined)
+        self.assertIn("/run/agent-tools:/agent-tools:ro", joined)
+        self.assertIn("--user 1000:1000", joined)
+        self.assertEqual(command[-3:], ["verilog-eval-agent-sandbox:1", "/agent-tools/node_modules/.bin/opencode", "run"])
+
     def test_bwrap_mounts_only_selected_store_paths(self):
         command = build_sandbox_command(
             workspace=Path("/run/workspace"),
