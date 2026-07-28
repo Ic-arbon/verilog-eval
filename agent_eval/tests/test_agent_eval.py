@@ -1,8 +1,10 @@
 import json
+import os
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_eval.adapters import create_adapter
 from agent_eval.config import write_agent_configs
@@ -131,6 +133,17 @@ class SandboxTests(unittest.TestCase):
                 run=fake_run,
             )
 
+    def test_agent_uses_sandbox_library_path_not_host_grader_path(self):
+        with patch.dict(
+            os.environ,
+            {
+                "LD_LIBRARY_PATH": "/host/compiler-libs",
+                "AGENT_EVAL_SANDBOX_LD_LIBRARY_PATH": "/sandbox/glibc",
+            },
+        ):
+            environment = sandbox_environment("opencode")
+        self.assertEqual(environment["LD_LIBRARY_PATH"], "/sandbox/glibc")
+
     def test_agent_caches_stay_inside_opt_backed_workspace(self):
         environment = sandbox_environment("opencode")
         self.assertEqual(environment["HOME"], "/workspace/.home")
@@ -189,23 +202,31 @@ class GraderTests(unittest.TestCase):
             for name in ("TopModule.sv", "ref.sv", "test.sv"):
                 (root / name).write_text("module placeholder; endmodule")
 
-            def fake_run(command, **_kwargs):
+            grader_environments = []
+
+            def fake_run(command, **kwargs):
+                grader_environments.append(kwargs["env"])
                 if command[0] == "iverilog":
                     return subprocess.CompletedProcess(command, 0, "", "")
                 return subprocess.CompletedProcess(
                     command, 0, "Mismatches: 0 in 10 samples\n", ""
                 )
 
-            result = grade_submission(
-                candidate=root / "TopModule.sv",
-                reference=root / "ref.sv",
-                testbench=root / "test.sv",
-                output_dir=root / "grade",
-                run=fake_run,
-            )
+            with patch.dict(os.environ, {"LD_LIBRARY_PATH": "/poisoned/glibc"}):
+                result = grade_submission(
+                    candidate=root / "TopModule.sv",
+                    reference=root / "ref.sv",
+                    testbench=root / "test.sv",
+                    output_dir=root / "grade",
+                    run=fake_run,
+                )
 
             self.assertTrue(result.passed)
             self.assertEqual(result.status, "passed")
+            self.assertTrue(grader_environments)
+            self.assertTrue(
+                all("LD_LIBRARY_PATH" not in env for env in grader_environments)
+            )
 
     def test_missing_submission_is_reported_without_running_tools(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -241,6 +262,20 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(metrics.tool_calls, 1)
         self.assertEqual(metrics.input_tokens, 120)
         self.assertEqual(metrics.output_tokens, 30)
+
+    def test_opencode_nested_step_tokens_are_counted(self):
+        lines = [
+            json.dumps(
+                {
+                    "type": "step_finish",
+                    "part": {"tokens": {"input": 7430, "output": 109}},
+                }
+            )
+        ]
+        metrics = parse_trajectory("opencode", lines)
+        self.assertEqual(metrics.turns, 1)
+        self.assertEqual(metrics.input_tokens, 7430)
+        self.assertEqual(metrics.output_tokens, 109)
 
     def test_invalid_json_lines_are_preserved_as_parse_errors(self):
         metrics = parse_trajectory("opencode", ["not-json"])
