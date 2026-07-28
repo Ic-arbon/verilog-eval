@@ -81,6 +81,9 @@ evaluation runs on the vLLM host itself.
 
 ### External agent evaluation
 
+See the [Agent testing guide](docs/agent-evaluation.md) for the complete Chinese
+runbook, result schema, comparison checklist, and troubleshooting steps.
+
 The agent harness can evaluate Pi and OpenCode against the same local model.
 Start with one problem:
 
