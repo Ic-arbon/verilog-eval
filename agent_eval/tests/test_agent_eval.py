@@ -435,6 +435,62 @@ class CanonicalEvaluationTests(unittest.TestCase):
         self.assertIn("--jobs=2", make)
 
 
+class StatsScriptTests(unittest.TestCase):
+    def test_stats_script_aggregates_agent_and_canonical_results(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_root = Path(tmp)
+            (run_root / "summary.csv").write_text(
+                "agent,problem,agent_status,sandbox,passed,grade_status,"
+                "verilog_eval_symbol,duration_seconds,turns,tool_calls,"
+                "input_tokens,output_tokens,parse_errors\n"
+                "opencode,Prob001_zero,completed,docker,True,passed,.,"
+                "2.0,2,3,100,20,0\n"
+                "opencode,Prob002_mux,timeout,docker,False,failed,S,"
+                "180.0,4,2,200,30,0\n"
+            )
+            for problem, final_sv in [
+                ("Prob001_zero", "/run/TopModule.sv"),
+                ("Prob002_mux", None),
+            ]:
+                problem_root = run_root / "opencode" / problem
+                problem_root.mkdir(parents=True)
+                (problem_root / "metrics.json").write_text(
+                    json.dumps(
+                        {
+                            "final_sv": final_sv,
+                            "metrics": {
+                                "turns": 2,
+                                "tool_calls": 3,
+                                "input_tokens": 100,
+                                "output_tokens": 20,
+                                "parse_errors": 0,
+                            },
+                        }
+                    )
+                )
+
+            repo_root = Path(__file__).resolve().parents[2]
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(repo_root / "scripts/agent-eval-stats"),
+                    "--json",
+                    str(run_root),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            stats = json.loads(completed.stdout)
+            self.assertEqual(stats["total"], 2)
+            self.assertEqual(stats["passed"], 1)
+            self.assertEqual(stats["submitted"], 1)
+            self.assertEqual(stats["agent_status"], {"completed": 1, "timeout": 1})
+            self.assertEqual(stats["verilog_eval_symbol"], {".": 1, "S": 1})
+            self.assertEqual(stats["passes_by_agent_status"], {"completed": 1})
+
+
 class MetricsTests(unittest.TestCase):
     def test_pi_jsonl_metrics_count_turns_tools_and_tokens(self):
         lines = [
