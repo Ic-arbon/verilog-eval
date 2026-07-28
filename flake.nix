@@ -7,6 +7,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
+      runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
 
       pythonRequirements = pkgs.writeText "verilog-eval-requirements.txt" ''
         langchain==0.2.17
@@ -19,6 +20,8 @@
         name = "verilog-eval-setup";
         runtimeInputs = [ pkgs.gitMinimal pkgs.uv ];
         text = ''
+          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
+
           root="''${VERILOG_EVAL_ROOT:-}"
           if [[ -z "$root" ]]; then
             root="$(git rev-parse --show-toplevel)"
@@ -54,6 +57,8 @@
           gnused
         ];
         text = ''
+          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
+
           root="''${VERILOG_EVAL_ROOT:-}"
           if [[ -z "$root" ]]; then
             root="$(git rev-parse --show-toplevel)"
@@ -169,6 +174,7 @@
         MAKEFLAGS = "SHELL=${pkgs.bash}/bin/bash";
 
         shellHook = ''
+          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
           export VERILOG_EVAL_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
           export PATH="$VERILOG_EVAL_ROOT/.venv/bin:$PATH"
 
