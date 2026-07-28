@@ -1,0 +1,145 @@
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_eval.backend import build_agent_command
+from agent_eval.generate import prepare_generation_workspace, publish_candidate
+from agent_eval.runner import build_evaluation_commands
+
+
+class BackendContractTests(unittest.TestCase):
+    def test_backends_receive_neutral_task_without_tool_syntax(self):
+        prompt = "Implement TopModule and save the final candidate to TopModule.sv."
+
+        for agent in ("pi", "opencode"):
+            command = build_agent_command(agent, "qwen3.6-coder", prompt)
+            self.assertEqual(command[-1], prompt)
+            self.assertNotIn("<tool_call>", " ".join(command))
+            self.assertNotIn("<function=read>", " ".join(command))
+
+    def test_unknown_backend_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, "unknown agent backend"):
+            build_agent_command("unknown", "qwen3.6-coder", "task")
+
+
+class GenerationWorkspaceTests(unittest.TestCase):
+    def test_spec_to_rtl_exposes_prompt_but_no_hidden_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            prompt.write_text("Implement TopModule with output zero.")
+            (root / "Prob001_zero_ref.sv").write_text("secret reference")
+            (root / "Prob001_zero_test.sv").write_text("secret test")
+
+            prepared = prepare_generation_workspace(
+                prompt_path=prompt,
+                task="spec-to-rtl",
+                problem="Prob001_zero",
+                workspace=root / "workspace",
+            )
+
+            self.assertEqual((prepared.workspace / "TASK.md").read_text(), prompt.read_text())
+            self.assertFalse((prepared.workspace / "TopModule.sv").exists())
+            self.assertFalse(any(prepared.workspace.rglob("*_ref.sv")))
+            self.assertFalse(any(prepared.workspace.rglob("*_test.sv")))
+            self.assertIn(prompt.read_text(), prepared.agent_prompt)
+            self.assertIn("TopModule.sv", prepared.agent_prompt)
+            self.assertNotIn("tool_call", prepared.agent_prompt)
+
+    def test_code_complete_starts_from_public_interface(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            interface = root / "Prob001_zero_ifc.txt"
+            prompt.write_text("Complete this module.")
+            interface.write_text("module TopModule(output zero);\n")
+
+            prepared = prepare_generation_workspace(
+                prompt_path=prompt,
+                task="code-complete-iccad2023",
+                problem="Prob001_zero",
+                workspace=root / "workspace",
+            )
+
+            self.assertEqual(
+                (prepared.workspace / "TopModule.sv").read_text(),
+                interface.read_text(),
+            )
+            self.assertIsNotNone(prepared.starter_digest)
+
+    def test_missing_or_unchanged_candidate_becomes_explicit_placeholder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            interface = root / "Prob001_zero_ifc.txt"
+            prompt.write_text("Complete this module.")
+            interface.write_text("module TopModule(output zero);\n")
+            prepared = prepare_generation_workspace(
+                prompt_path=prompt,
+                task="code-complete-iccad2023",
+                problem="Prob001_zero",
+                workspace=root / "workspace",
+            )
+            output = root / "Prob001_zero_sample01.sv"
+
+            publication = publish_candidate(
+                prepared=prepared,
+                output_path=output,
+                agent_status="completed",
+            )
+
+            self.assertFalse(publication.submitted)
+            self.assertEqual(publication.status, "missing_submission")
+            self.assertIn("AGENT_EVAL_NO_SUBMISSION", output.read_text())
+
+    def test_modified_candidate_is_published_without_rewriting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            prompt.write_text("Implement TopModule.")
+            prepared = prepare_generation_workspace(
+                prompt_path=prompt,
+                task="spec-to-rtl",
+                problem="Prob001_zero",
+                workspace=root / "workspace",
+            )
+            candidate = prepared.workspace / "TopModule.sv"
+            candidate.write_text("module TopModule; endmodule\n")
+            output = root / "Prob001_zero_sample01.sv"
+
+            publication = publish_candidate(prepared, output, "timeout")
+
+            self.assertTrue(publication.submitted)
+            self.assertEqual(publication.status, "timeout")
+            self.assertEqual(output.read_text(), candidate.read_text())
+
+
+class MakeIntegrationContractTests(unittest.TestCase):
+    def test_agent_replaces_only_make_generator(self):
+        configure, make = build_evaluation_commands(
+            repo_root=Path("/repo"),
+            build_dir=Path("/run/verilog-eval"),
+            artifact_root=Path("/run/agent-artifacts"),
+            agent="opencode",
+            task="spec-to-rtl",
+            model="qwen3.6-coder",
+            problems_file=Path("/run/problems.txt"),
+            jobs=48,
+            timeout=180,
+            max_tokens=8192,
+            temperature=0.6,
+            top_p=0.95,
+            bash_path="/nix/store/bash/bin/bash",
+            sandbox_backend="docker",
+        )
+
+        self.assertIn("--with-task=spec-to-rtl", configure)
+        self.assertNotIn("--with-pregen", " ".join(configure))
+        self.assertIn("GENERATE_VERILOG=/repo/agent_eval/generate.py", make)
+        self.assertTrue(any(item.startswith("GENERATE_FLAGS=") for item in make))
+        self.assertIn("sv-iv-analyze", make)
+        self.assertIn("--jobs=48", make)
+
+
+if __name__ == "__main__":
+    unittest.main()
