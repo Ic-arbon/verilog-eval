@@ -38,14 +38,84 @@
           echo "Python dependencies are ready in $venv"
         '';
       };
+
+      runEvaluation = pkgs.writeShellApplication {
+        name = "verilog-eval-run";
+        runtimeInputs = with pkgs; [
+          setupPython
+          gitMinimal
+          iverilog
+          python311
+          gnumake
+          bash
+          coreutils
+          util-linux
+          gnugrep
+          gnused
+        ];
+        text = ''
+          root="''${VERILOG_EVAL_ROOT:-}"
+          if [[ -z "$root" ]]; then
+            root="$(git rev-parse --show-toplevel)"
+          fi
+          export VERILOG_EVAL_ROOT="$root"
+
+          verilog-eval-setup
+          export PATH="$root/.venv/bin:$PATH"
+
+          jobs="''${VERILOG_EVAL_JOBS:-$(nproc)}"
+          if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+            echo "VERILOG_EVAL_JOBS must be a positive integer" >&2
+            exit 2
+          fi
+
+          # Default to the benchmark's low-temperature Pass@1 configuration.
+          # Later user arguments override these defaults.
+          configure_args=(
+            --with-samples=1
+            --with-temperature=0
+            --with-top-p=0.01
+            "$@"
+          )
+          config_key="$(
+            printf '%s\0' "''${configure_args[@]}" \
+              | sha256sum \
+              | cut -c1-12
+          )"
+          build_root="''${VERILOG_EVAL_BUILD_ROOT:-$root/build}"
+          build_dir="$build_root/nix-eval-$config_key"
+          mkdir -p "$build_dir"
+
+          echo "Configuring evaluation in $build_dir"
+          echo "Running make with $jobs parallel jobs"
+          cd "$build_dir"
+          "$root/configure" "''${configure_args[@]}"
+          exec make --jobs="$jobs" SHELL=${pkgs.bash}/bin/bash
+        '';
+      };
     in
     {
-      packages.${system}.setup = setupPython;
+      packages.${system} = {
+        setup = setupPython;
+        eval = runEvaluation;
+      };
 
-      apps.${system}.setup = {
-        type = "app";
-        program = "${setupPython}/bin/verilog-eval-setup";
-        meta.description = "Install VerilogEval Python dependencies into .venv";
+      apps.${system} = {
+        default = {
+          type = "app";
+          program = "${runEvaluation}/bin/verilog-eval-run";
+          meta.description = "Run VerilogEval with all available CPU cores";
+        };
+        eval = {
+          type = "app";
+          program = "${runEvaluation}/bin/verilog-eval-run";
+          meta.description = "Run VerilogEval with all available CPU cores";
+        };
+        setup = {
+          type = "app";
+          program = "${setupPython}/bin/verilog-eval-setup";
+          meta.description = "Install VerilogEval Python dependencies into .venv";
+        };
       };
 
       devShells.${system}.default = pkgs.mkShell {

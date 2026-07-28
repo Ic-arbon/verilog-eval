@@ -39,6 +39,26 @@ The shell also contains the Verilog simulators, Python 3.11, and GNU
 command-line tools used by the evaluation harness. The lock file pins nixpkgs
 for a reproducible base environment.
 
+Run the complete evaluation directly from the repository root:
+
+```sh
+export OPENAI_API_KEY="..."
+nix run
+```
+
+The runner installs the pinned Python dependencies when needed, defaults to
+the low-temperature Pass@1 configuration (`samples=1`, `temperature=0`,
+`top_p=0.01`), and runs Make with one parallel job per available CPU core.
+Configure options can be appended after `--`, for example:
+
+```sh
+nix run .#eval -- --with-task=code-complete-iccad2023 --with-model=gpt-4o
+```
+
+Set `VERILOG_EVAL_JOBS` to override the detected parallelism. Each distinct
+configuration is kept in its own `build/nix-eval-*` directory so interrupted
+runs can resume without mixing results from different configurations.
+
 To verify the core tools:
 
 ```sh
