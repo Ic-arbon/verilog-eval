@@ -1,11 +1,15 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from agent_eval.adapters import create_adapter
+from agent_eval.config import write_agent_configs
+from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest
+from agent_eval.sandbox import build_sandbox_command
 from agent_eval.workspace import prepare_workspace
 
 
@@ -60,6 +64,89 @@ class AdapterTests(unittest.TestCase):
     def test_unknown_adapter_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown agent"):
             create_adapter("unknown")
+
+
+class ConfigTests(unittest.TestCase):
+    def test_configs_point_both_agents_at_the_same_model(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            write_agent_configs(
+                workspace,
+                base_url="http://127.0.0.1:58000/v1",
+                model="qwen3.6-coder",
+            )
+
+            pi_config = json.loads((workspace / ".pi-agent/models.json").read_text())
+            opencode_config = json.loads((workspace / "opencode.json").read_text())
+
+            self.assertEqual(
+                pi_config["providers"]["vllm-local"]["models"][0]["id"],
+                "qwen3.6-coder",
+            )
+            self.assertIn(
+                "qwen3.6-coder",
+                opencode_config["provider"]["vllm-local"]["models"],
+            )
+
+
+class SandboxTests(unittest.TestCase):
+    def test_bwrap_mounts_only_selected_store_paths(self):
+        command = build_sandbox_command(
+            workspace=Path("/run/workspace"),
+            agent_tools=Path("/run/agent-tools"),
+            agent_command=["/agent-tools/node_modules/.bin/pi", "--mode", "json"],
+            store_paths=[Path("/nix/store/aaa-node"), Path("/nix/store/bbb-bash")],
+            sandbox_path="/agent-tools/node_modules/.bin:/nix/store/aaa-node/bin",
+            bash_path="/nix/store/bbb-bash/bin/bash",
+            env_path="/nix/store/ccc-coreutils/bin/env",
+            environment={"PI_OFFLINE": "1"},
+        )
+
+        joined = " ".join(map(str, command))
+        self.assertNotIn("--ro-bind /nix/store /nix/store", joined)
+        self.assertIn("--ro-bind /nix/store/aaa-node /nix/store/aaa-node", joined)
+        self.assertIn("--bind /run/workspace /workspace", joined)
+        self.assertEqual(
+            command[-3:],
+            ["/agent-tools/node_modules/.bin/pi", "--mode", "json"],
+        )
+
+
+class GraderTests(unittest.TestCase):
+    def test_passing_simulation_is_reported(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for name in ("TopModule.sv", "ref.sv", "test.sv"):
+                (root / name).write_text("module placeholder; endmodule")
+
+            def fake_run(command, **_kwargs):
+                if command[0] == "iverilog":
+                    return subprocess.CompletedProcess(command, 0, "", "")
+                return subprocess.CompletedProcess(
+                    command, 0, "Mismatches: 0 in 10 samples\n", ""
+                )
+
+            result = grade_submission(
+                candidate=root / "TopModule.sv",
+                reference=root / "ref.sv",
+                testbench=root / "test.sv",
+                output_dir=root / "grade",
+                run=fake_run,
+            )
+
+            self.assertTrue(result.passed)
+            self.assertEqual(result.status, "passed")
+
+    def test_missing_submission_is_reported_without_running_tools(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result = grade_submission(
+                candidate=Path(tmp) / "TopModule.sv",
+                reference=Path(tmp) / "ref.sv",
+                testbench=Path(tmp) / "test.sv",
+                output_dir=Path(tmp),
+            )
+            self.assertEqual(result.status, "missing_submission")
+            self.assertFalse(result.passed)
 
 
 class MetricsTests(unittest.TestCase):

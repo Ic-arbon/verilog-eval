@@ -79,6 +79,33 @@ use a remote vLLM or the optional LiteLLM gateway instead, override
 `OPENAI_API_BASE` and `OPENAI_API_KEY`; the defaults remain suitable when the
 evaluation runs on the vLLM host itself.
 
+### External agent evaluation
+
+The agent harness can evaluate Pi and OpenCode against the same local model.
+Start with one problem:
+
+```sh
+nix run .#agent-eval -- --agent all --problems Prob001_zero
+```
+
+Run one agent or the full dataset with:
+
+```sh
+nix run .#agent-eval -- --agent pi
+nix run .#agent-eval -- --agent opencode
+```
+
+The first run installs pinned Pi and OpenCode versions into `.agent-tools`.
+Each trajectory runs under Bubblewrap with only its task workspace and selected
+Nix tool closures mounted; reference solutions and hidden testbenches are not
+visible to the agent. The supervisor grades `TopModule.sv` after the agent
+exits and writes raw JSONL trajectories, logs, metrics, and summaries under
+`runs/agent-eval-*`.
+
+Defaults are 16 parallel trajectories and a 180-second timeout per problem.
+Override them with `--jobs` and `--timeout`. Linux user namespaces must permit
+unprivileged Bubblewrap execution.
+
 To verify the core tools:
 
 ```sh

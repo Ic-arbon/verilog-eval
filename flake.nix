@@ -9,6 +9,24 @@
       pkgs = nixpkgs.legacyPackages.${system};
       runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
 
+      agentSandboxPackages = with pkgs; [
+        nodejs_22
+        bash
+        iverilog
+        python311
+        coreutils
+        gnumake
+        gitMinimal
+        gnugrep
+        gnused
+        findutils
+        util-linux
+        which
+        stdenv.cc.cc.lib
+      ];
+      agentSandboxPath = pkgs.lib.makeBinPath agentSandboxPackages;
+      agentStoreRoots = pkgs.lib.concatStringsSep " " (map toString agentSandboxPackages);
+
       pythonRequirements = pkgs.writeText "verilog-eval-requirements.txt" ''
         langchain==0.2.17
         langchain-community==0.2.19
@@ -16,6 +34,38 @@
         langchain-nvidia-ai-endpoints==0.2.2
         pandas==2.2.3
       '';
+
+      agentToolsPackageJson = pkgs.writeText "agent-eval-package.json" (builtins.toJSON {
+        private = true;
+        dependencies = {
+          "@earendil-works/pi-coding-agent" = "0.82.1";
+          "opencode-ai" = "1.18.7";
+        };
+      });
+
+      setupAgentTools = pkgs.writeShellApplication {
+        name = "verilog-agent-tools-setup";
+        runtimeInputs = [ pkgs.coreutils pkgs.gitMinimal pkgs.nodejs_22 ];
+        text = ''
+          root="''${VERILOG_EVAL_ROOT:-}"
+          if [[ -z "$root" ]]; then
+            root="$(git rev-parse --show-toplevel)"
+          fi
+
+          tools="$root/.agent-tools"
+          marker="pi=0.82.1 opencode=1.18.7"
+          if [[ ! -x "$tools/node_modules/.bin/pi" \
+             || ! -x "$tools/node_modules/.bin/opencode" \
+             || "$(cat "$tools/.versions" 2>/dev/null || true)" != "$marker" ]]; then
+            mkdir -p "$tools"
+            cp ${agentToolsPackageJson} "$tools/package.json"
+            npm install --prefix "$tools" --no-audit --no-fund
+            printf '%s\n' "$marker" > "$tools/.versions"
+          fi
+
+          echo "External agents ready: $marker"
+        '';
+      };
 
       setupPython = pkgs.writeShellApplication {
         name = "verilog-eval-setup";
@@ -101,6 +151,39 @@
         '';
       };
 
+      runAgentEvaluation = pkgs.writeShellApplication {
+        name = "verilog-agent-eval";
+        runtimeInputs = with pkgs; [
+          setupAgentTools
+          python311
+          bubblewrap
+          nix
+          iverilog
+          coreutils
+          bash
+        ];
+        text = ''
+          root="''${VERILOG_EVAL_ROOT:-}"
+          if [[ -z "$root" ]]; then
+            root="$(git rev-parse --show-toplevel)"
+          fi
+          export VERILOG_EVAL_ROOT="$root"
+
+          verilog-agent-tools-setup
+
+          export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
+          export AGENT_EVAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap
+          export AGENT_EVAL_BASH=${pkgs.bash}/bin/bash
+          export AGENT_EVAL_ENV=${pkgs.coreutils}/bin/env
+          export AGENT_EVAL_SANDBOX_PATH="/agent-tools/node_modules/.bin:${agentSandboxPath}"
+          export AGENT_EVAL_STORE_ROOTS="${agentStoreRoots}"
+          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
+          export PYTHONPATH=${./.}
+
+          exec python3 ${./agent_eval/runner.py} --repo-root "$root" "$@"
+        '';
+      };
+
       runVllmEvaluation = pkgs.writeShellApplication {
         name = "verilog-eval-vllm";
         runtimeInputs = with pkgs; [ runEvaluation curl gnugrep coreutils ];
@@ -132,6 +215,8 @@
         setup = setupPython;
         eval = runEvaluation;
         vllm = runVllmEvaluation;
+        agent-eval = runAgentEvaluation;
+        agent-tools-setup = setupAgentTools;
       };
 
       apps.${system} = {
@@ -149,6 +234,11 @@
           type = "app";
           program = "${runEvaluation}/bin/verilog-eval-run";
           meta.description = "Run VerilogEval with all available CPU cores";
+        };
+        agent-eval = {
+          type = "app";
+          program = "${runAgentEvaluation}/bin/verilog-agent-eval";
+          meta.description = "Evaluate Pi and OpenCode in isolated workspaces";
         };
         setup = {
           type = "app";
