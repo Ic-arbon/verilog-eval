@@ -129,6 +129,9 @@ class ConfigTests(unittest.TestCase):
                 workspace,
                 base_url="http://127.0.0.1:58000/v1",
                 model="qwen3.6-coder",
+                max_tokens=4096,
+                temperature=0.2,
+                top_p=0.8,
             )
 
             pi_config = json.loads((workspace / ".pi-agent/models.json").read_text())
@@ -146,8 +149,17 @@ class ConfigTests(unittest.TestCase):
                 opencode_config["provider"]["vllm-local"]["models"]
                 ["qwen3.6-coder"]["tool_call"]
             )
-            self.assertEqual(opencode_config["agent"]["build"]["temperature"], 0.6)
-            self.assertEqual(opencode_config["agent"]["build"]["top_p"], 0.95)
+            self.assertEqual(
+                pi_config["providers"]["vllm-local"]["models"][0]["maxTokens"],
+                4096,
+            )
+            self.assertEqual(opencode_config["agent"]["build"]["temperature"], 0.2)
+            self.assertEqual(opencode_config["agent"]["build"]["top_p"], 0.8)
+            self.assertEqual(
+                opencode_config["provider"]["vllm-local"]["models"]
+                ["qwen3.6-coder"]["limit"]["output"],
+                4096,
+            )
 
 
 class SandboxTests(unittest.TestCase):
@@ -409,8 +421,14 @@ class CanonicalEvaluationTests(unittest.TestCase):
             task="spec-to-rtl",
             jobs=2,
             bash_path="/nix/store/bash/bin/bash",
+            max_tokens=4096,
+            temperature=0.2,
+            top_p=0.8,
         )
 
+        self.assertIn("--with-max-tokens=4096", configure)
+        self.assertIn("--with-temperature=0.2", configure)
+        self.assertIn("--with-top-p=0.8", configure)
         self.assertIn("--with-pregen=/run/pregen", configure)
         self.assertIn("--with-problems=/run/problems.txt", configure)
         self.assertIn("sv-iv-analyze", make)
