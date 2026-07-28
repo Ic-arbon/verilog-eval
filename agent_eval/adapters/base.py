@@ -5,11 +5,15 @@ from agent_eval.models import AgentRequest
 
 
 TASK_PROMPT = (
-    "Do not narrate or announce planned actions. Start immediately by calling "
-    "the read tool on TASK.md and AGENT_INSTRUCTIONS.md. Then implement the task "
-    "completely, use tools to compile and self-test it, and continue until "
-    "/workspace/TopModule.sv exists and compiles. A text-only response before "
-    "TopModule.sv exists is a failure."
+    "Do not narrate or announce planned actions. The vLLM server requires "
+    "Qwen3-Coder native tool syntax. Never write pseudo calls such as "
+    "<read.filePath=...>. Start by calling read exactly in this format:\n"
+    "<tool_call>\n<function=read>\n<parameter=filePath>\n"
+    "/workspace/TASK.md\n</parameter>\n</function>\n</tool_call>\n"
+    "Then read AGENT_INSTRUCTIONS.md using the same native format. Implement "
+    "the task completely, use tools to compile and self-test it, and continue "
+    "until /workspace/TopModule.sv exists and compiles. A text-only response "
+    "before TopModule.sv exists is a failure."
 )
 
 

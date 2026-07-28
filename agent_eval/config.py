@@ -55,6 +55,7 @@ def write_agent_configs(workspace: Path, base_url: str, model: str) -> None:
                 "models": {
                     model: {
                         "name": model,
+                        "tool_call": True,
                         "limit": {"context": 262144, "output": 8192},
                     }
                 },

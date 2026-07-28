@@ -350,7 +350,7 @@ cat "$run/opencode/Prob001_zero/grade.log"
 cat "$run/opencode/Prob001_zero/metrics.json"
 ```
 
-这通常表示代码逻辑错误、端口错误、编译错误或隐藏测试 mismatch，而不是 Agent 启动失败。
+这通常表示代码逻辑错误、端口错误、编译错误或隐藏测试 mismatch，而不是 Agent 启动失败。如果轨迹中出现 `<read.filePath=...>` 且 `tool_calls=0`，模型生成的是普通文本伪调用；vLLM 的 `qwen3_coder` parser 需要 `<tool_call><function=...>` 原生格式。Adapter 会在任务提示中给出该格式，并在 OpenCode 模型元数据中声明 `tool_call: true`。
 
 ### `iverilog` 出现 stack smashing
 
