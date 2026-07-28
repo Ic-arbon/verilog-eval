@@ -95,8 +95,8 @@ class ConfigTests(unittest.TestCase):
                 "qwen3.6-coder",
                 opencode_config["provider"]["vllm-local"]["models"],
             )
-            self.assertEqual(opencode_config["agent"]["build"]["temperature"], 0)
-            self.assertEqual(opencode_config["agent"]["build"]["top_p"], 0.01)
+            self.assertEqual(opencode_config["agent"]["build"]["temperature"], 0.6)
+            self.assertEqual(opencode_config["agent"]["build"]["top_p"], 0.95)
 
 
 class SandboxTests(unittest.TestCase):
