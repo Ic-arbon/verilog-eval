@@ -79,6 +79,7 @@
           # Later user arguments override these defaults.
           configure_args=(
             --with-samples=1
+            --with-max-tokens=8192
             --with-temperature=0
             --with-top-p=0.01
             "$@"

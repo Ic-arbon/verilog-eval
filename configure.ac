@@ -104,6 +104,18 @@ AC_SUBST([samples])
 AC_MSG_NOTICE([using samples: ${samples}])
 
 #-------------------------------------------------------------------------
+# --with-max-tokens
+#-------------------------------------------------------------------------
+
+AC_ARG_WITH(max-tokens,
+  AS_HELP_STRING([--with-max-tokens],[Maximum response tokens per model query]),
+  [max_tokens="${with_max_tokens}"],
+  [max_tokens=1024])
+
+AC_SUBST([max_tokens])
+AC_MSG_NOTICE([using max response tokens: ${max_tokens}])
+
+#-------------------------------------------------------------------------
 # --with-temperature
 #-------------------------------------------------------------------------
 

@@ -48,6 +48,7 @@ endif
 
 GENERATE_FLAGS += "--task=@task@"
 
+GENERATE_FLAGS += "--max-tokens=@max_tokens@"
 GENERATE_FLAGS += "--temperature=@temperature@"
 GENERATE_FLAGS += "--top-p=@top_p@"
 

@@ -592,6 +592,7 @@ problems_file
 dataset_dir
 top_p
 temperature
+max_tokens
 samples
 task
 rules
@@ -644,6 +645,7 @@ with_examples
 with_rules
 with_task
 with_samples
+with_max_tokens
 with_temperature
 with_top_p
 with_dataset
@@ -1268,6 +1270,7 @@ Optional Packages:
   --with-rules            Include in-context learning rules
   --with-task             Task to execute
   --with-samples          Number of samples for each problem
+  --with-max-tokens       Maximum response tokens per model query
   --with-temperature      Temperature of model
   --with-top-p            Top-p of model
   --with-dataset          Directory with dataset files
@@ -1842,6 +1845,23 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: using samples: ${samples}" >&5
 $as_echo "$as_me: using samples: ${samples}" >&6;}
+
+#-------------------------------------------------------------------------
+# --with-max-tokens
+#-------------------------------------------------------------------------
+
+
+# Check whether --with-max-tokens was given.
+if test "${with_max_tokens+set}" = set; then :
+  withval=$with_max_tokens; max_tokens="${with_max_tokens}"
+else
+  max_tokens=1024
+fi
+
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using max response tokens: ${max_tokens}" >&5
+$as_echo "$as_me: using max response tokens: ${max_tokens}" >&6;}
 
 #-------------------------------------------------------------------------
 # --with-temperature
