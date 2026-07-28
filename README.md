@@ -59,6 +59,19 @@ Set `VERILOG_EVAL_JOBS` to override the detected parallelism. Each distinct
 configuration is kept in its own `build/nix-eval-*` directory so interrupted
 runs can resume without mixing results from different configurations.
 
+The `qwen3.6-coder` model served by an OpenAI-compatible vLLM endpoint is also
+whitelisted. Point the client at the existing server without changing its
+configuration:
+
+```sh
+export OPENAI_API_BASE="http://<vllm-host>:58000/v1"
+export OPENAI_API_KEY="local" # use the real key when the endpoint requires one
+nix run .#eval -- --with-model=qwen3.6-coder
+```
+
+For the optional LiteLLM gateway, use port `4000` and a LiteLLM virtual key
+instead.
+
 To verify the core tools:
 
 ```sh
