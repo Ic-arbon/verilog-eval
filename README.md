@@ -85,14 +85,14 @@ The agent harness can evaluate Pi and OpenCode against the same local model.
 Start with one problem:
 
 ```sh
-nix run .#agent-eval -- --agent all --problems Prob001_zero
+./scripts/agent-eval --agent all --problems Prob001_zero
 ```
 
 Run one agent or the full dataset with:
 
 ```sh
-nix run .#agent-eval -- --agent pi
-nix run .#agent-eval -- --agent opencode
+./scripts/agent-eval --agent pi
+./scripts/agent-eval --agent opencode
 ```
 
 The first run installs pinned Pi and OpenCode versions into `.agent-tools`.
@@ -106,11 +106,11 @@ metrics, and summaries under `runs/agent-eval-*`.
 
 Defaults are 16 parallel trajectories and a 180-second timeout per problem.
 Override them with `--jobs` and `--timeout`. At least one supported sandbox
-backend must be available before any trajectory starts. npm and agent caches
-default to `.cache` under the repository rather than the user's home directory;
-set `VERILOG_EVAL_CACHE_ROOT=/opt/path` to choose another `/opt` location. To
-also redirect Nix's own pre-launch cache, set `XDG_CACHE_HOME` before invoking
-`nix run`.
+backend must be available before any trajectory starts. The wrapper creates
+`.cache` under the repository and redirects Nix, npm, XDG, and agent caches
+there before Nix starts. Set `VERILOG_EVAL_CACHE_ROOT=/opt/path` to choose
+another `/opt` location. Direct `nix run .#agent-eval -- ...` remains available,
+but Nix's pre-launch cache then follows the caller's existing environment.
 
 To verify the core tools:
 
