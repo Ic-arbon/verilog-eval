@@ -22,16 +22,16 @@ MachineEval is not supported in VerilogEvalV2, only the Human Eval problem state
 
 ### Setup Linux Environment
 
-A pinned Nix flake is provided for the `x86_64-linux` EDA test environment.
+A pinned Nix flake is provided for the `x86_64-linux` test environment.
 Enter it with:
 
 ```sh
-nix develop --accept-flake-config
+nix develop
 ```
 
-The flag enables the FOSSi Foundation binary cache declared by the flake, so
-the LibreLane EDA dependencies do not need to be built from source. The lock
-file pins both nixpkgs and LibreLane for reproducible environments.
+The shell contains the Verilog simulators, Python 3.11, and GNU command-line
+tools used by the evaluation harness. The lock file pins nixpkgs for a
+reproducible environment.
 
 To verify the core tools:
 
