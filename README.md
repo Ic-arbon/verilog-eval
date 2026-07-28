@@ -96,15 +96,21 @@ nix run .#agent-eval -- --agent opencode
 ```
 
 The first run installs pinned Pi and OpenCode versions into `.agent-tools`.
-Each trajectory runs under Bubblewrap with only its task workspace and selected
-Nix tool closures mounted; reference solutions and hidden testbenches are not
-visible to the agent. The supervisor grades `TopModule.sv` after the agent
-exits and writes raw JSONL trajectories, logs, metrics, and summaries under
-`runs/agent-eval-*`.
+Each trajectory runs in an isolated task workspace; reference solutions and
+hidden testbenches are not visible to the agent. The default `--sandbox auto`
+uses Bubblewrap when unprivileged user namespaces work and otherwise falls back
+to a read-only, capability-free Docker container. Use `--sandbox bwrap` or
+`--sandbox docker` to require one backend. The supervisor grades `TopModule.sv`
+after the agent exits and writes commands, raw JSONL trajectories, logs,
+metrics, and summaries under `runs/agent-eval-*`.
 
 Defaults are 16 parallel trajectories and a 180-second timeout per problem.
-Override them with `--jobs` and `--timeout`. Linux user namespaces must permit
-unprivileged Bubblewrap execution.
+Override them with `--jobs` and `--timeout`. At least one supported sandbox
+backend must be available before any trajectory starts. npm and agent caches
+default to `.cache` under the repository rather than the user's home directory;
+set `VERILOG_EVAL_CACHE_ROOT=/opt/path` to choose another `/opt` location. To
+also redirect Nix's own pre-launch cache, set `XDG_CACHE_HOME` before invoking
+`nix run`.
 
 To verify the core tools:
 

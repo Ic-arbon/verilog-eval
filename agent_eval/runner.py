@@ -21,9 +21,11 @@ from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest, AgentResult
 from agent_eval.sandbox import (
+    build_docker_command,
     build_sandbox_command,
     nix_store_closure,
     required_store_roots,
+    select_sandbox_backend,
 )
 from agent_eval.workspace import prepare_workspace
 
@@ -39,6 +41,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--problems", nargs="*", help="Problem IDs; defaults to the full dataset")
     parser.add_argument("--run-root", type=Path)
+    parser.add_argument(
+        "--sandbox",
+        choices=["auto", "bwrap", "docker"],
+        default="auto",
+        help="Isolation backend; auto tries Bubblewrap then Docker",
+    )
     parser.add_argument("--dry-run", action="store_true")
     return parser.parse_args()
 
@@ -63,8 +71,31 @@ def check_vllm(base_url: str) -> None:
             raise RuntimeError(f"vLLM health check returned HTTP {response.status}")
 
 
+def ensure_docker_image(docker_path: str, image: str, archive: Path) -> None:
+    loaded = subprocess.run(
+        [docker_path, "load", "--input", str(archive)],
+        capture_output=True,
+        text=True,
+    )
+    if loaded.returncode != 0:
+        raise RuntimeError(f"failed to load sandbox image: {loaded.stderr.strip()}")
+    inspect = subprocess.run(
+        [docker_path, "image", "inspect", image],
+        capture_output=True,
+        text=True,
+    )
+    if inspect.returncode != 0:
+        raise RuntimeError(f"sandbox image was not loaded as {image}")
+
+
 def sandbox_environment(agent: str) -> Dict[str, str]:
     environment = {
+        "HOME": "/workspace/.home",
+        "XDG_CACHE_HOME": "/workspace/.cache",
+        "XDG_CONFIG_HOME": "/workspace/.config",
+        "XDG_DATA_HOME": "/workspace/.local/share",
+        "XDG_STATE_HOME": "/workspace/.local/state",
+        "npm_config_cache": "/workspace/.cache/npm",
         "PI_OFFLINE": "1",
         "PI_TELEMETRY": "0",
         "LD_LIBRARY_PATH": os.environ.get("LD_LIBRARY_PATH", ""),
@@ -100,28 +131,41 @@ def run_agent(
     agent_command = adapter.agent_command(request)
 
     tools_path = Path(os.environ["AGENT_EVAL_AGENT_TOOLS"])
-    sandbox_command = build_sandbox_command(
-        workspace=workspace.resolve(),
-        agent_tools=tools_path.resolve(),
-        agent_command=agent_command,
-        store_paths=store_paths,
-        sandbox_path=os.environ["AGENT_EVAL_SANDBOX_PATH"],
-        bash_path=os.environ["AGENT_EVAL_BASH"],
-        env_path=os.environ["AGENT_EVAL_ENV"],
-        environment=sandbox_environment(agent),
-        bwrap_path=os.environ.get("AGENT_EVAL_BWRAP", "bwrap"),
-    )
+    if args.sandbox_backend == "docker":
+        sandbox_command = build_docker_command(
+            workspace=workspace.resolve(),
+            agent_tools=tools_path.resolve(),
+            agent_command=agent_command,
+            image=os.environ["AGENT_EVAL_DOCKER_IMAGE"],
+            sandbox_path=os.environ["AGENT_EVAL_SANDBOX_PATH"],
+            environment=sandbox_environment(agent),
+            docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
+            uid=os.getuid(),
+            gid=os.getgid(),
+        )
+    else:
+        sandbox_command = build_sandbox_command(
+            workspace=workspace.resolve(),
+            agent_tools=tools_path.resolve(),
+            agent_command=agent_command,
+            store_paths=store_paths,
+            sandbox_path=os.environ["AGENT_EVAL_SANDBOX_PATH"],
+            bash_path=os.environ["AGENT_EVAL_BASH"],
+            env_path=os.environ["AGENT_EVAL_ENV"],
+            environment=sandbox_environment(agent),
+            bwrap_path=os.environ.get("AGENT_EVAL_BWRAP", "bwrap"),
+        )
 
     trajectory_path = problem_root / "trajectory.jsonl"
     stderr_path = problem_root / "stderr.log"
     problem_root.mkdir(parents=True, exist_ok=True)
+    (problem_root / "command.json").write_text(
+        json.dumps(sandbox_command, indent=2) + "\n"
+    )
 
     if args.dry_run:
         trajectory_path.write_text("")
         stderr_path.write_text("")
-        (problem_root / "command.json").write_text(
-            json.dumps(sandbox_command, indent=2) + "\n"
-        )
         result = AgentResult(
             agent=agent,
             status="dry_run",
@@ -182,12 +226,17 @@ def run_agent(
 
     record = result.to_dict()
     record["problem"] = problem
+    record["sandbox"] = args.sandbox_backend
     record["grade"] = grade.to_dict() if grade else None
     (problem_root / "metrics.json").write_text(json.dumps(record, indent=2) + "\n")
     return result, grade
 
 
-def write_summary(run_root: Path, records: List[Tuple[str, str, AgentResult, object]]) -> None:
+def write_summary(
+    run_root: Path,
+    records: List[Tuple[str, str, AgentResult, object]],
+    sandbox_backend: str,
+) -> None:
     summary = []
     for agent, problem, result, grade in sorted(records):
         summary.append(
@@ -195,6 +244,7 @@ def write_summary(run_root: Path, records: List[Tuple[str, str, AgentResult, obj
                 "agent": agent,
                 "problem": problem,
                 "agent_status": result.status,
+                "sandbox": sandbox_backend,
                 "passed": bool(grade and grade.passed),
                 "grade_status": grade.status if grade else "dry_run",
                 "duration_seconds": round(result.duration_seconds, 3),
@@ -225,6 +275,24 @@ def main() -> int:
 
     if not args.dry_run:
         check_vllm(args.base_url)
+        try:
+            args.sandbox_backend = select_sandbox_backend(
+                requested=args.sandbox,
+                bwrap_path=os.environ.get("AGENT_EVAL_BWRAP", "bwrap"),
+                docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
+                true_path=os.environ.get("AGENT_EVAL_TRUE", "true"),
+            )
+            if args.sandbox_backend == "docker":
+                ensure_docker_image(
+                    docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
+                    image=os.environ["AGENT_EVAL_DOCKER_IMAGE"],
+                    archive=Path(os.environ["AGENT_EVAL_DOCKER_IMAGE_ARCHIVE"]),
+                )
+        except (KeyError, RuntimeError) as error:
+            raise SystemExit(str(error))
+    else:
+        args.sandbox_backend = "bwrap" if args.sandbox == "auto" else args.sandbox
+    print(f"Sandbox backend: {args.sandbox_backend}")
 
     problems = load_problems(args.repo_root, args.task, args.problems or [])
     agents = ["pi", "opencode"] if args.agent == "all" else [args.agent]
@@ -232,7 +300,11 @@ def main() -> int:
     run_root = (args.run_root or args.repo_root / "runs" / f"agent-eval-{timestamp}").resolve()
     run_root.mkdir(parents=True, exist_ok=True)
 
-    store_paths = nix_store_closure(required_store_roots())
+    store_paths = (
+        nix_store_closure(required_store_roots())
+        if args.sandbox_backend == "bwrap"
+        else []
+    )
     work = [(agent, problem) for agent in agents for problem in problems]
     print(f"Running {len(work)} trajectories with {args.jobs} parallel jobs")
 
@@ -252,7 +324,7 @@ def main() -> int:
             except Exception as error:
                 print(f"[{agent}] {problem}: ERROR: {error}", file=sys.stderr)
 
-    write_summary(run_root, records)
+    write_summary(run_root, records, args.sandbox_backend)
     return 0 if len(records) == len(work) else 1
 
 

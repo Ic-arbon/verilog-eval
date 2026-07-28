@@ -1,7 +1,10 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Dict, Iterable, List, Sequence
+from typing import Callable, Dict, Iterable, List, Sequence
+
+
+CommandRunner = Callable[..., subprocess.CompletedProcess]
 
 
 def nix_store_closure(store_roots: Sequence[Path]) -> List[Path]:
@@ -14,6 +17,114 @@ def nix_store_closure(store_roots: Sequence[Path]) -> List[Path]:
         text=True,
     )
     return sorted({Path(line) for line in result.stdout.splitlines() if line})
+
+
+def select_sandbox_backend(
+    requested: str,
+    bwrap_path: str,
+    docker_path: str,
+    true_path: str,
+    run: CommandRunner = subprocess.run,
+) -> str:
+    if requested not in {"auto", "bwrap", "docker"}:
+        raise ValueError(f"unknown sandbox backend: {requested}")
+
+    errors = []
+    if requested in {"auto", "bwrap"}:
+        try:
+            probe = run(
+                [
+                    bwrap_path,
+                    "--unshare-all",
+                    "--share-net",
+                    "--ro-bind",
+                    "/",
+                    "/",
+                    "--",
+                    true_path,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if probe.returncode == 0:
+                return "bwrap"
+            errors.append(f"bubblewrap: {(probe.stderr or '').strip()}")
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"bubblewrap: {error}")
+        if requested == "bwrap":
+            raise RuntimeError("Bubblewrap sandbox is unavailable: " + "; ".join(errors))
+
+    if requested in {"auto", "docker"}:
+        try:
+            probe = run(
+                [docker_path, "info", "--format", "{{.ServerVersion}}"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if probe.returncode == 0:
+                return "docker"
+            errors.append(f"docker: {(probe.stderr or '').strip()}")
+        except (OSError, subprocess.SubprocessError) as error:
+            errors.append(f"docker: {error}")
+        if requested == "docker":
+            raise RuntimeError("Docker sandbox is unavailable: " + "; ".join(errors))
+
+    raise RuntimeError(
+        "No usable sandbox backend. Enable unprivileged user namespaces or start "
+        "Docker. " + "; ".join(errors)
+    )
+
+
+def build_docker_command(
+    workspace: Path,
+    agent_tools: Path,
+    agent_command: Sequence[str],
+    image: str,
+    sandbox_path: str,
+    environment: Dict[str, str],
+    docker_path: str = "docker",
+    uid: int = 65534,
+    gid: int = 65534,
+) -> List[str]:
+    command = [
+        docker_path,
+        "run",
+        "--rm",
+        "--init",
+        "--network",
+        "host",
+        "--read-only",
+        "--cap-drop",
+        "ALL",
+        "--security-opt",
+        "no-new-privileges",
+        "--pids-limit",
+        "512",
+        "--user",
+        f"{uid}:{gid}",
+        "--tmpfs",
+        "/tmp:rw,nosuid,nodev,size=256m,mode=1777",
+        "--tmpfs",
+        "/home/agent:rw,nosuid,nodev,size=512m,mode=1777",
+        "--volume",
+        f"{workspace}:/workspace:rw",
+        "--volume",
+        f"{agent_tools}:/agent-tools:ro",
+        "--workdir",
+        "/workspace",
+        "--env",
+        "HOME=/home/agent",
+        "--env",
+        f"PATH={sandbox_path}",
+        "--env",
+        "SHELL=/bin/bash",
+    ]
+    for key, value in sorted(environment.items()):
+        command.extend(["--env", f"{key}={value}"])
+    command.extend([image, *agent_command])
+    return command
 
 
 def build_sandbox_command(

@@ -9,5 +9,6 @@ build*/
 autom4te.cache/
 .venv/
 .agent-tools/
+.cache/
 runs/
 

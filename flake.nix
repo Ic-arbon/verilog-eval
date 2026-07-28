@@ -7,7 +7,7 @@
     let
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
-      runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
+      runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib pkgs.glibc ];
 
       agentSandboxPackages = with pkgs; [
         nodejs_22
@@ -26,6 +26,33 @@
       ];
       agentSandboxPath = pkgs.lib.makeBinPath agentSandboxPackages;
       agentStoreRoots = pkgs.lib.concatStringsSep " " (map toString agentSandboxPackages);
+      agentSandboxImageName = "verilog-eval-agent-sandbox";
+      agentSandboxImageTag = "v1";
+      agentSandboxImage = pkgs.dockerTools.buildLayeredImage {
+        name = agentSandboxImageName;
+        tag = agentSandboxImageTag;
+        contents = agentSandboxPackages;
+        extraCommands = ''
+          mkdir -p bin lib lib64 usr/bin home/agent workspace tmp
+          ln -sfn ${pkgs.bash}/bin/bash bin/bash
+          ln -sfn ${pkgs.bash}/bin/bash bin/sh
+          ln -sfn ${pkgs.coreutils}/bin/env usr/bin/env
+          ln -sfn ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2
+          ln -sfn ${pkgs.glibc}/lib/libc.so.6 lib/libc.so.6
+          ln -sfn ${pkgs.glibc}/lib/libpthread.so.0 lib/libpthread.so.0
+          ln -sfn ${pkgs.glibc}/lib/libdl.so.2 lib/libdl.so.2
+          ln -sfn ${pkgs.glibc}/lib/libm.so.6 lib/libm.so.6
+          chmod 1777 home/agent workspace tmp
+        '';
+        config = {
+          WorkingDir = "/workspace";
+          Env = [
+            "PATH=${agentSandboxPath}"
+            "HOME=/home/agent"
+            "SHELL=/bin/bash"
+          ];
+        };
+      };
 
       pythonRequirements = pkgs.writeText "verilog-eval-requirements.txt" ''
         langchain==0.2.17
@@ -51,6 +78,11 @@
           if [[ -z "$root" ]]; then
             root="$(git rev-parse --show-toplevel)"
           fi
+
+          cache_root="''${VERILOG_EVAL_CACHE_ROOT:-$root/.cache}"
+          mkdir -p "$cache_root/npm"
+          export XDG_CACHE_HOME="$cache_root"
+          export npm_config_cache="$cache_root/npm"
 
           tools="$root/.agent-tools"
           marker="pi=0.82.1 opencode=1.18.7"
@@ -157,6 +189,7 @@
           setupAgentTools
           python311
           bubblewrap
+          docker_29
           nix
           iverilog
           coreutils
@@ -168,11 +201,19 @@
             root="$(git rev-parse --show-toplevel)"
           fi
           export VERILOG_EVAL_ROOT="$root"
+          export VERILOG_EVAL_CACHE_ROOT="''${VERILOG_EVAL_CACHE_ROOT:-$root/.cache}"
+          mkdir -p "$VERILOG_EVAL_CACHE_ROOT"
+          export XDG_CACHE_HOME="$VERILOG_EVAL_CACHE_ROOT"
+          export npm_config_cache="$VERILOG_EVAL_CACHE_ROOT/npm"
 
           verilog-agent-tools-setup
 
           export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
           export AGENT_EVAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap
+          export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
+          export AGENT_EVAL_DOCKER_IMAGE="${agentSandboxImageName}:${agentSandboxImageTag}"
+          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE=${agentSandboxImage}
+          export AGENT_EVAL_TRUE=${pkgs.coreutils}/bin/true
           export AGENT_EVAL_BASH=${pkgs.bash}/bin/bash
           export AGENT_EVAL_ENV=${pkgs.coreutils}/bin/env
           export AGENT_EVAL_SANDBOX_PATH="/agent-tools/node_modules/.bin:${agentSandboxPath}"

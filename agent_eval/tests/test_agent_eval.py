@@ -9,6 +9,7 @@ from agent_eval.config import write_agent_configs
 from agent_eval.grader import grade_submission
 from agent_eval.metrics import parse_trajectory
 from agent_eval.models import AgentRequest
+from agent_eval.runner import sandbox_environment
 from agent_eval.sandbox import (
     build_docker_command,
     build_sandbox_command,
@@ -129,6 +130,12 @@ class SandboxTests(unittest.TestCase):
                 true_path="true",
                 run=fake_run,
             )
+
+    def test_agent_caches_stay_inside_opt_backed_workspace(self):
+        environment = sandbox_environment("opencode")
+        self.assertEqual(environment["HOME"], "/workspace/.home")
+        self.assertEqual(environment["XDG_CACHE_HOME"], "/workspace/.cache")
+        self.assertEqual(environment["npm_config_cache"], "/workspace/.cache/npm")
 
     def test_docker_command_is_read_only_and_drops_privileges(self):
         command = build_docker_command(
