@@ -39,12 +39,18 @@ The shell also contains the Verilog simulators, Python 3.11, and GNU
 command-line tools used by the evaluation harness. The lock file pins nixpkgs
 for a reproducible base environment.
 
-Run the complete evaluation directly from the repository root:
+Run the complete evaluation against the local `qwen3.6-coder` vLLM directly
+from the repository root:
 
 ```sh
-export OPENAI_API_KEY="..."
 nix run
 ```
+
+The default app uses `http://127.0.0.1:58000/v1` and automatically reads
+`VLLM_API_KEY` from `/opt/llm/api-key.env` when that file exists; otherwise it
+uses a harmless placeholder required by the OpenAI client. It checks the vLLM
+health endpoint before starting, so no environment variables are normally
+needed. The explicit entry point is `nix run .#vllm`.
 
 The runner installs the pinned Python dependencies when needed, defaults to
 the low-temperature Pass@1 configuration (`samples=1`, `temperature=0`,
@@ -52,25 +58,24 @@ the low-temperature Pass@1 configuration (`samples=1`, `temperature=0`,
 Configure options can be appended after `--`, for example:
 
 ```sh
-nix run .#eval -- --with-task=code-complete-iccad2023 --with-model=gpt-4o
+nix run -- --with-task=code-complete-iccad2023
+```
+
+For another OpenAI-compatible or hosted model, use the generic entry point and
+provide its credentials:
+
+```sh
+OPENAI_API_KEY="..." nix run .#eval -- --with-model=gpt-4o
 ```
 
 Set `VERILOG_EVAL_JOBS` to override the detected parallelism. Each distinct
 configuration is kept in its own `build/nix-eval-*` directory so interrupted
 runs can resume without mixing results from different configurations.
 
-The `qwen3.6-coder` model served by an OpenAI-compatible vLLM endpoint is also
-whitelisted. Point the client at the existing server without changing its
-configuration:
-
-```sh
-export OPENAI_API_BASE="http://<vllm-host>:58000/v1"
-export OPENAI_API_KEY="local" # use the real key when the endpoint requires one
-nix run .#eval -- --with-model=qwen3.6-coder
-```
-
-For the optional LiteLLM gateway, use port `4000` and a LiteLLM virtual key
-instead.
+The `qwen3.6-coder` model is included in the OpenAI-compatible whitelist. To
+use a remote vLLM or the optional LiteLLM gateway instead, override
+`OPENAI_API_BASE` and `OPENAI_API_KEY`; the defaults remain suitable when the
+evaluation runs on the vLLM host itself.
 
 To verify the core tools:
 

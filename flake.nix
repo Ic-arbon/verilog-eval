@@ -93,18 +93,50 @@
           exec make --jobs="$jobs" SHELL=${pkgs.bash}/bin/bash
         '';
       };
+
+      runVllmEvaluation = pkgs.writeShellApplication {
+        name = "verilog-eval-vllm";
+        runtimeInputs = with pkgs; [ runEvaluation curl gnugrep coreutils ];
+        text = ''
+          export OPENAI_API_BASE="''${OPENAI_API_BASE:-http://127.0.0.1:58000/v1}"
+
+          if [[ -z "''${OPENAI_API_KEY:-}" ]]; then
+            key_file="''${VERILOG_EVAL_VLLM_KEY_FILE:-/opt/llm/api-key.env}"
+            if [[ -r "$key_file" ]]; then
+              key_line="$(grep -m1 '^VLLM_API_KEY=' "$key_file" || true)"
+              export OPENAI_API_KEY="''${key_line#VLLM_API_KEY=}"
+            fi
+            export OPENAI_API_KEY="''${OPENAI_API_KEY:-local}"
+          fi
+
+          health_url="''${OPENAI_API_BASE%/v1}/health"
+          if ! curl --fail --silent --show-error "$health_url" >/dev/null; then
+            echo "vLLM is not healthy at $health_url" >&2
+            exit 1
+          fi
+
+          echo "Using qwen3.6-coder at $OPENAI_API_BASE"
+          exec verilog-eval-run --with-model=qwen3.6-coder "$@"
+        '';
+      };
     in
     {
       packages.${system} = {
         setup = setupPython;
         eval = runEvaluation;
+        vllm = runVllmEvaluation;
       };
 
       apps.${system} = {
         default = {
           type = "app";
-          program = "${runEvaluation}/bin/verilog-eval-run";
-          meta.description = "Run VerilogEval with all available CPU cores";
+          program = "${runVllmEvaluation}/bin/verilog-eval-vllm";
+          meta.description = "Run VerilogEval against the local qwen3.6-coder vLLM";
+        };
+        vllm = {
+          type = "app";
+          program = "${runVllmEvaluation}/bin/verilog-eval-vllm";
+          meta.description = "Run VerilogEval against the local qwen3.6-coder vLLM";
         };
         eval = {
           type = "app";
