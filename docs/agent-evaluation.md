@@ -1,417 +1,223 @@
-# Agent 测试说明
+# Agent 评测指南
 
-本文说明如何使用 VerilogEval 在同一个本地 vLLM 模型上测试 Pi 和 OpenCode，并读取、比较和排查测试结果。
+## 1. 核心边界
 
-## 1. 测试目标
-
-Agent 测试与 model-only 测试使用相同的 Verilog 题目和隐藏评分器，但允许 Agent 在提交前读取任务、编写代码、创建自测文件并调用 `iverilog`。
-
-建议比较以下三组结果：
-
-- model-only：模型直接生成一次答案；
-- Pi：模型通过 Pi 的工具循环完成任务；
-- OpenCode：模型通过 OpenCode 的工具循环完成任务。
-
-公平比较时，应固定仓库提交、模型、vLLM 地址、题目集合、超时和评分器版本。
-
-## 2. 执行架构
-
-每道题使用一个独立工作区。Agent 只能看到：
+Agent 只替换 VerilogEval 的代码生成命令：
 
 ```text
-TASK.md
-AGENT_INSTRUCTIONS.md
-TopModule.sv             # Agent 创建
-Agent 自己创建的测试文件
-Agent 配置和缓存目录
+公开 benchmark 输入
+  → Agent generator backend
+  → 标准 sample.sv + generation log
+  → 原版 Makefile / iverilog / hidden tests / sv-iv-analyze
 ```
 
-Agent 看不到数据集仓库中的 `*_ref.sv` 和 `*_test.sv`。Agent 退出后，宿主监督器把 `TopModule.sv` 转换为 VerilogEval pregen 样本，再调用原版 Makefile、iverilog 规则和 `sv-iv-analyze` 使用隐藏文件评分。Agent 与 model-only 因此共享同一套正确性诊断。
+架构图：[`agent-eval-generator-architecture.excalidraw`](agent-eval-generator-architecture.excalidraw)
 
-默认隔离模式为 `--sandbox auto`：
-
-1. 如果无特权 user namespace 可用，使用 Bubblewrap；
-2. Bubblewrap 不可用时，自动使用 Docker；
-3. 两者都不可用时，在启动任何题目之前直接报错。
-
-Docker 容器使用只读根文件系统、非 root UID、空 capabilities，并且不挂载 Docker socket。只有当前题目的 `/workspace` 可写。
-
-Adapter 是 CLI 翻译层，不是另一个 Agent 循环。OpenCode Adapter 负责生成 `opencode.json`、选择 provider/model、拼接非交互命令并采集 JSONL；Pi Adapter 做相同的 CLI 参数转换。Adapter 不解析模型原始工具语法，也不会把普通文本伪装成工具调用。模型输出先由 vLLM 的 `qwen3_coder` parser 转换为 OpenAI `tool_calls`，再由 OpenCode 执行。若模型只输出 `<read...>` 之类普通文本，OpenCode 会将其作为文本正常结束，监督器最终记录 `missing_submission`。
-
-## 3. 前置条件
-
-运行环境需要：
-
-- `x86_64-linux`；
-- Nix Flakes；
-- 健康的本地 vLLM，默认地址为 `http://127.0.0.1:58000/v1`；
-- Bubblewrap 或当前用户可访问的 Docker daemon；
-- 足够的 `/opt` 磁盘空间用于 Nix、Docker、轨迹和缓存。
-
-检查服务：
-
-```bash
-curl --fail http://127.0.0.1:58000/health
-docker info >/dev/null
-```
-
-如果 Docker 数据也要放在 `/opt`，可在 `/etc/docker/daemon.json` 中配置：
-
-```json
-{
-  "data-root": "/opt/docker"
-}
-```
-
-修改后验证并重启：
-
-```bash
-sudo dockerd --validate --config-file=/etc/docker/daemon.json
-sudo systemctl restart docker
-docker info | grep 'Docker Root Dir'
-```
-
-## 4. 推荐入口与缓存
-
-推荐使用包装脚本：
-
-```bash
-./scripts/agent-eval [测试参数]
-```
-
-包装脚本内部仍然执行 `nix run .#agent-eval`，但会在 Nix 启动前自动创建并设置：
+Agent generator 实现与 `scripts/sv-generate` 相同的关键合同：
 
 ```text
-<仓库>/.cache
+输入：task、prompt 文件、model/sampling 参数、output 路径
+输出：完整 Verilog candidate、generation log
 ```
 
-在 `/opt/agent/verilog-eval` 部署时，默认缓存位置就是：
+Adapter 不进行提示词优化，不教工具序列化格式，不抽取聊天代码，不重试缺失提交，也不参与正确性评分。
+
+## 2. 两种任务输入
+
+### `spec-to-rtl`
+
+Agent 工作区包含：
 
 ```text
-/opt/agent/verilog-eval/.cache
+TASK.md       # 原始 *_prompt.txt
 ```
 
-需要指定其他位置时：
+Agent 必须创建：
 
-```bash
-VERILOG_EVAL_CACHE_ROOT=/opt/verilog-eval-cache \
-  ./scripts/agent-eval --agent opencode --problems Prob001_zero
+```text
+TopModule.sv
 ```
 
-直接使用 Nix 也可以，但若要避免 Nix 使用家目录缓存，必须在 `nix run` 之前设置环境变量：
+### `code-complete-iccad2023`
 
-```bash
-XDG_CACHE_HOME="$PWD/.cache" \
-VERILOG_EVAL_CACHE_ROOT="$PWD/.cache" \
-nix run .#agent-eval -- \
-  --agent opencode \
-  --problems Prob001_zero
+Agent 工作区包含：
+
+```text
+TASK.md       # 原始 *_prompt.txt
+TopModule.sv  # 使用公开 *_ifc.txt 初始化
 ```
 
-## 5. 单题烟雾测试
+Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missing_submission`。
 
-不要直接从 156 题开始。先分别验证一个 Agent、一题和一个并发任务。
+两种任务都不会向 Agent 暴露：
 
-### OpenCode
+```text
+*_ref.sv
+*_test.sv
+```
+
+## 3. Generator 与 Backend 职责
+
+`agent_eval/generate.py` 负责一次 Make generation request：
+
+1. 创建该 sample 的隔离工作区；
+2. 放入公开 prompt/starter；
+3. 调用 `agent_eval/backend.py` 生成 Pi 或 OpenCode CLI 命令；
+4. 在 Bubblewrap 或 Docker 中执行 Agent；
+5. 将 `TopModule.sv` 发布到 Make 指定的 sample 路径；
+6. 写入 token、turn、tool、状态和轨迹 sidecar。
+
+`agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
+
+如果 Agent 没有产生有效 artifact，generator 会写入明确的失败占位样本，让完整 Make 批次继续，并保留真实状态：
+
+```text
+missing_submission
+agent_error
+timeout
+```
+
+正式 Pass@1 不自动重试。
+
+## 4. 运行
+
+推荐使用包装脚本，使 Nix、npm、XDG 和 Agent 缓存保留在仓库 `.cache`：
 
 ```bash
 cd /opt/agent/verilog-eval
-git pull
-
 ./scripts/agent-eval \
   --agent opencode \
-  --problems Prob001_zero \
-  --jobs 1
+  --with-task=spec-to-rtl \
+  --with-model=qwen3.6-coder \
+  --with-samples=1 \
+  --with-max-tokens=8192 \
+  --with-temperature=0.6 \
+  --with-top-p=0.95 \
+  --jobs 48 \
+  --timeout 180
 ```
 
-### Pi
+Pi：
 
 ```bash
 ./scripts/agent-eval \
   --agent pi \
-  --problems Prob001_zero \
-  --jobs 1
+  --with-task=spec-to-rtl \
+  --jobs 48
 ```
 
-正常启动时应看到：
-
-```text
-External agents ready: pi=0.82.1 opencode=1.18.7
-Sandbox backend: docker
-Running 1 trajectories with 1 parallel jobs
-```
-
-最终结果应明确显示 `PASS` 或其他 Agent/评分状态。例如：
-
-```text
-[opencode] Prob001_zero: PASS
-opencode: 1/1 passed
-```
-
-## 6. 分阶段扩大测试
-
-单题通过后，建议按以下顺序增加负载。
-
-### 小批量
+全部题目是默认行为。单题或小批量：
 
 ```bash
 ./scripts/agent-eval \
   --agent opencode \
-  --problems Prob001_zero Prob002_m2014_q4i Prob003_step_one \
+  --with-task=spec-to-rtl \
+  --problems Prob001_zero Prob002_m2014_q4i \
   --jobs 2
 ```
 
-### 单 Agent 全量
+使用与 model-only 相同的问题列表文件：
 
 ```bash
 ./scripts/agent-eval \
   --agent opencode \
-  --jobs 16 \
-  --timeout 180
+  --with-task=spec-to-rtl \
+  --with-problems=/path/to/problems.txt \
+  --jobs 48
 ```
 
-### 两个 Agent 全量
-
-```bash
-./scripts/agent-eval \
-  --agent all \
-  --jobs 16 \
-  --timeout 180
-```
-
-`--jobs` 是所有轨迹共享的总并发数，不是每个 Agent 各自的并发数。若 vLLM 出现排队、超时或显存压力，应先降到 `4` 或 `8`。
-
-## 7. 常用参数
+## 5. 参数
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| `--agent` | `all` | `pi`、`opencode` 或 `all` |
-| `--with-task`（兼容 `--task`） | `spec-to-rtl` | `spec-to-rtl` 或 `code-complete-iccad2023` |
-| `--with-model`（兼容 `--model`） | `qwen3.6-coder` | 发送给两个 Agent 的模型 ID |
-| `--with-samples` | `1` | Agent 正式评测固定为 Pass@1，只接受 `1` |
-| `--with-max-tokens` | `8192` | 每次模型响应的最大 token 数 |
-| `--with-temperature` | `0.6` | OpenCode 请求温度及 canonical 元数据 |
-| `--with-top-p` | `0.95` | OpenCode 请求 top-p 及 canonical 元数据 |
-| `--base-url` | `http://127.0.0.1:58000/v1` | OpenAI-compatible vLLM 地址 |
-| `--with-problems` | 对应任务的全部题目 | 与直接 LLM 相同：包含题目 ID 的文件路径 |
-| `--problems` | 对应任务的全部题目 | Agent 便捷参数：空格或逗号分隔的问题 ID |
-| `--jobs` | 最多 16 | 并行轨迹数量 |
-| `--timeout` | `180` | 每个 Agent 轨迹的秒数上限 |
+| `--agent` | `all` | `pi`、`opencode` 或依次运行两者 |
+| `--with-task` | `spec-to-rtl` | benchmark task |
+| `--with-model` | `qwen3.6-coder` | 本地模型 ID |
+| `--with-samples` | `1` | 当前正式 Agent 评测固定为 Pass@1 |
+| `--with-max-tokens` | `8192` | 每次模型响应上限 |
+| `--with-temperature` | `0.6` | OpenCode 请求参数与运行元数据 |
+| `--with-top-p` | `0.95` | OpenCode 请求参数与运行元数据 |
+| `--jobs` | 最多 16 | 原版 Make 并发生成/评分任务数 |
+| `--timeout` | `180` | 单个外部 Agent CLI 的秒数上限 |
 | `--sandbox` | `auto` | `auto`、`bwrap` 或 `docker` |
-| `--run-root` | 自动生成 | 指定结果根目录 |
-| `--dry-run` | 关闭 | 只生成工作区和沙箱命令，不调用 Agent |
+| `--run-root` | 自动时间戳 | 结果根目录 |
+| `--dry-run` | 关闭 | 只写 configure/make 命令，不执行 |
 
-Pi 0.82.1 没有公开的 temperature/top-p CLI 参数，因此 Pi 请求使用 vLLM 服务端采样默认值；运行 Pi 时必须确保传给评测器的 `--with-temperature` 和 `--with-top-p` 与 vLLM `--override-generation-config` 一致。OpenCode 会在请求中显式发送这两个值。
+旧写法 `--task`、`--model`、`--max-tokens`、`--temperature` 和 `--top-p` 仍是兼容别名。
 
-测试 code-complete 数据集：
+Pi 0.82.1 没有公开 temperature/top-p CLI 参数，因此 Pi 使用 vLLM 服务端采样默认值。运行 Pi 时应让命令元数据与 vLLM `--override-generation-config` 一致。
 
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --with-task=code-complete-iccad2023 \
-  --problems Prob001_zero \
-  --jobs 1
-```
-
-## 8. 结果目录
-
-每次运行会创建：
+## 6. 输出
 
 ```text
-runs/agent-eval-<UTC时间>/
-├── summary.csv
-├── summary.json
+runs/agent-eval-<UTC>/
 └── <agent>/
+    ├── commands.json
+    ├── configure.log
+    ├── make.log
+    ├── summary.csv
+    ├── summary.txt
     ├── verilog-eval/
     │   ├── summary.csv
     │   ├── summary.txt
-    │   ├── configure.log
-    │   ├── make.log
-    │   ├── pregen/
-    │   └── build/
+    │   └── <problem>/
+    │       ├── <problem>_sample01.sv
+    │       ├── <problem>_sample01-sv-generate.log
+    │       └── <problem>_sample01-sv-iv-test.log
     └── <problem>/
-        ├── command.json
-        ├── trajectory.jsonl
-        ├── stderr.log
-        ├── grade.log
-        ├── metrics.json
-        └── workspace/
-            ├── TASK.md
-            ├── AGENT_INSTRUCTIONS.md
-            ├── TopModule.sv
-            └── Agent 创建的其他文件
+        └── sample01/
+            ├── agent.json
+            ├── command.json
+            ├── trajectory.jsonl
+            ├── stderr.log
+            └── workspace/
+                ├── TASK.md
+                └── TopModule.sv
 ```
 
-主要文件：
-
-- 顶层 `summary.csv`：Agent 状态、工具指标和原版评分符号的扩展汇总；
-- 顶层 `summary.json`：整次运行的结构化结果；
-- `<agent>/verilog-eval/summary.csv`：原版 `sv-iv-analyze` 输出，可与 model-only 直接比较；
-- `<agent>/verilog-eval/summary.txt`：原版终端诊断和通过率；
-- `metrics.json`：单题 Agent 状态、评分状态、耗时、token 和工具调用；
-- `trajectory.jsonl`：Agent 的原始 JSONL 事件；
-- `stderr.log`：Agent 或沙箱启动错误；
-- `grade.log`：从原版 VerilogEval build 复制的逐题编译和仿真日志；
-- `command.json`：实际执行的沙箱命令，用于复现启动问题；
-- `workspace/TopModule.sv`：Agent 最终提交。
-
-## 9. 状态解释
-
-Agent 状态与评分状态是两个不同层次。
-
-### Agent 状态
-
-| 状态 | 含义 |
-| --- | --- |
-| `completed` | Agent 正常退出并提交了 `TopModule.sv` |
-| `agent_error` | Agent CLI 或沙箱命令非零退出 |
-| `timeout` | Agent 超过 `--timeout` |
-| `missing_submission` | Agent 正常结束但没有生成 `TopModule.sv` |
-| `dry_run` | 只生成命令，没有执行 Agent |
-
-### 原版 VerilogEval 评分
-
-`grade.status` 只表示 `passed` 或 `failed`；详细原因使用原版 `sv-iv-analyze` 符号，记录在 `grade.symbol` 和顶层 `verilog_eval_symbol`：
-
-| 符号 | 含义 |
-| --- | --- |
-| `.` | 隐藏测试通过，零 mismatch |
-| `S` | Verilog 语法错误 |
-| `C` | 一般编译错误 |
-| `p` | 端口或信号绑定错误 |
-| `m` | 模块类型错误或缺失 |
-| `T` | 仿真超时 |
-| `R` | 运行时失败或存在 mismatch |
-| 其他 | 保留原版 analyzer 的细分诊断符号 |
-
-`completed` 不等于 `passed`。它只表示 Agent 正常提交了文件；最终正确性必须查看原版 `grade.symbol`。如果模型只描述下一步却没有调用工具，OpenCode 可能以退出码 `0` 结束；此时 Agent 状态是 `missing_submission`，监督器会放入明确的无提交占位样本，让原版流程产生失败符号，同时保留真实 Agent 状态。
-
-正式 Pass@1 测试不会自动重试无提交轨迹。OpenCode 默认使用 `--with-temperature=0.6`、`--with-top-p=0.95`；公共任务提示要求立即调用工具，以减少无动作结束并保持运行间配置一致。OpenCode 在 API 请求中显式发送的采样参数优先于 vLLM 默认值，因此 Agent、model-only 和服务端三处配置必须保持一致。
-
-现有 model-only 低温基线使用 `temperature=0`、`top_p=0.01`，不能与上述 Agent 结果直接做严格归因比较。比较时应给两个入口传入相同的 `--with-temperature`、`--with-top-p` 和 `--with-max-tokens`，或将不同配置的结果分开报告。
-
-测试命令的退出码主要表示监督器是否完成所有轨迹，不表示所有题目都通过。通过率应读取 `summary.csv` 或终端中的 `x/y passed`。
-
-## 10. 指标说明
-
-每题记录：
-
-- `duration_seconds`：Agent 运行时间；
-- `turns`：Agent/model 交互轮数；
-- `tool_calls`：工具调用次数；
-- `input_tokens`：各模型步骤输入 token 总量；
-- `output_tokens`：各模型步骤输出 token 总量；
-- `parse_errors`：无法解析的 JSONL 行数；
-- `passed`：隐藏测试是否通过。
-
-比较 Agent 时，至少报告：
+正确性只读取原版：
 
 ```text
-通过题数 / 总题数
-通过率
-平均耗时
-总输入/输出 token
-平均 turns
-平均 tool calls
-Agent 版本
-仓库提交
-模型与 endpoint
-沙箱后端
+<agent>/summary.csv
+<agent>/summary.txt
 ```
 
-## 11. 常见故障
-
-### Bubblewrap UID map 被拒绝
-
-错误：
+Agent 行为读取：
 
 ```text
-bwrap: setting up uid map: Permission denied
+<agent>/<problem>/sample01/agent.json
+<agent>/<problem>/sample01/trajectory.jsonl
 ```
 
-使用默认 `--sandbox auto` 会自动回退 Docker。也可明确指定：
+`timeout` 时如果已经写出 `TopModule.sv`，candidate 仍会进入原版评分，同时 `agent.json` 保留 `status=timeout`。
 
-```bash
-./scripts/agent-eval --sandbox docker --agent opencode --problems Prob001_zero
+## 7. 隔离
+
+Agent 沙箱只挂载该 sample 的 `/workspace` 和只读 Agent 工具目录。隐藏数据集不挂载。Docker 使用：
+
+```text
+read-only root
+non-root UID/GID
+cap-drop ALL
+no-new-privileges
+PID limit
+no Docker socket
 ```
 
-### Docker 不可访问
+Bubblewrap 只挂载选定 Nix store closure、动态加载器、Agent 工具和当前工作区。若宿主禁止 unprivileged user namespaces，`--sandbox auto` 会在启动任何 generation request 前回退到 Docker。
 
-检查：
+## 8. 旧结果
 
-```bash
-docker info
+重构前通过独立 runner 生成、再用 `--with-pregen` 导回的运行应标记为：
+
+```text
+harness-v1 / protocol-prompted
 ```
 
-若出现权限错误，将当前用户加入 Docker 组并重新登录：
+新 Generator ABI 运行应标记为：
 
-```bash
-sudo usermod -aG docker "$USER"
+```text
+harness-v2 / neutral-generator-backend
 ```
 
-### 所有任务立即 `agent_error`
-
-先停止全量测试，查看第一题：
-
-```bash
-run=$(ls -dt runs/agent-eval-* | head -1)
-cat "$run/opencode/Prob001_zero/stderr.log"
-cat "$run/opencode/Prob001_zero/command.json"
-```
-
-### Agent `completed` 但未通过
-
-依次检查：
-
-```bash
-run=$(ls -dt runs/agent-eval-* | head -1)
-cat "$run/opencode/Prob001_zero/workspace/TopModule.sv"
-cat "$run/opencode/Prob001_zero/grade.log"
-cat "$run/opencode/Prob001_zero/metrics.json"
-```
-
-这通常表示代码逻辑错误、端口错误、编译错误或隐藏测试 mismatch，而不是 Agent 启动失败。如果轨迹中出现 `<read.filePath=...>` 且 `tool_calls=0`，模型生成的是普通文本伪调用；vLLM 的 `qwen3_coder` parser 需要 `<tool_call><function=...>` 原生格式。Adapter 会在任务提示中给出该格式，并在 OpenCode 模型元数据中声明 `tool_call: true`。
-
-### `iverilog` 出现 stack smashing
-
-确保使用最新仓库版本。评分器会清除宿主的 `LD_LIBRARY_PATH` 和 `LD_PRELOAD`，避免 Docker glibc 污染隐藏评分流程：
-
-```bash
-git pull
-```
-
-### 大批量超时
-
-先降低并发并增加单题超时：
-
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --jobs 4 \
-  --timeout 300
-```
-
-## 12. 公平比较检查表
-
-开始正式对比前确认：
-
-- 三组测试使用相同 Git commit 和数据集；
-- Pi 与 OpenCode 使用相同模型 ID 和 vLLM endpoint；
-- 使用相同题目列表和隐藏评分器；
-- 使用相同超时与最大输出 token；
-- 不在测试中途修改 prompt 或 Agent 版本；
-- 保存原始 JSONL、stderr、grade log 和 summary；
-- 记录 Pi、OpenCode、Docker、Nix 和模型版本；
-- 先完成单题与小批量验证，再运行完整数据集。
-
-版本记录示例：
-
-```bash
-git rev-parse HEAD
-cat .agent-tools/.versions
-docker version --format '{{.Server.Version}}'
-nix --version
-curl -s http://127.0.0.1:58000/v1/models
-```
-
-完成上述检查后，再使用固定命令分别运行 Pi、OpenCode 和 model-only 基线。
+两种结果不能混在同一个实验配置中。

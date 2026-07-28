@@ -1,9 +1,14 @@
+import io
+import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from agent_eval.backend import build_agent_command
-from agent_eval.generate import prepare_generation_workspace, publish_candidate
+from agent_eval.generate import main, prepare_generation_workspace, publish_candidate
+from agent_eval.models import TrajectoryMetrics
 from agent_eval.runner import build_evaluation_commands
 
 
@@ -112,6 +117,62 @@ class GenerationWorkspaceTests(unittest.TestCase):
             self.assertTrue(publication.submitted)
             self.assertEqual(publication.status, "timeout")
             self.assertEqual(output.read_text(), candidate.read_text())
+
+
+class GeneratorCliTests(unittest.TestCase):
+    def test_generator_publishes_candidate_log_and_sidecar(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
+            artifacts = root / "artifacts"
+            prompt.write_text("Implement TopModule with output zero.")
+
+            def fake_execute(_args, prepared, _artifact):
+                (prepared.workspace / "TopModule.sv").write_text(
+                    "module TopModule(output zero); assign zero=0; endmodule\n"
+                )
+                return (
+                    "completed",
+                    0,
+                    1.5,
+                    TrajectoryMetrics(
+                        turns=2,
+                        tool_calls=1,
+                        input_tokens=100,
+                        output_tokens=20,
+                    ),
+                )
+
+            argv = [
+                "generate.py",
+                "--agent=opencode",
+                "--model=qwen3.6-coder",
+                "--task=spec-to-rtl",
+                "--timeout=180",
+                "--max-tokens=8192",
+                "--temperature=0.6",
+                "--top-p=0.95",
+                "--sandbox-backend=docker",
+                f"--artifact-root={artifacts}",
+                f"--output={output}",
+                str(prompt),
+            ]
+            stdout = io.StringIO()
+            with patch.object(sys, "argv", argv), patch(
+                "agent_eval.generate.execute_agent", side_effect=fake_execute
+            ), redirect_stdout(stdout):
+                returncode = main()
+
+            self.assertEqual(returncode, 0)
+            self.assertIn("module TopModule", output.read_text())
+            self.assertIn("agent_status = completed", stdout.getvalue())
+            self.assertIn("prompt_tokens = 100", stdout.getvalue())
+            sidecar = (
+                artifacts
+                / "opencode/Prob001_zero/sample01/agent.json"
+            )
+            self.assertTrue(sidecar.is_file())
 
 
 class MakeIntegrationContractTests(unittest.TestCase):

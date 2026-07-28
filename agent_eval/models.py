@@ -1,14 +1,5 @@
 from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Any, Dict, Optional
-
-
-@dataclass(frozen=True)
-class AgentRequest:
-    problem_id: str
-    workspace: Path
-    model: str
-    timeout_seconds: int
+from typing import Dict
 
 
 @dataclass
@@ -21,22 +12,3 @@ class TrajectoryMetrics:
 
     def to_dict(self) -> Dict[str, int]:
         return asdict(self)
-
-
-@dataclass
-class AgentResult:
-    agent: str
-    status: str
-    exit_code: int
-    final_sv: Optional[Path]
-    trajectory: Path
-    stderr_log: Path
-    duration_seconds: float
-    metrics: TrajectoryMetrics
-
-    def to_dict(self) -> Dict[str, Any]:
-        data = asdict(self)
-        data["final_sv"] = str(self.final_sv) if self.final_sv else None
-        data["trajectory"] = str(self.trajectory)
-        data["stderr_log"] = str(self.stderr_log)
-        return data

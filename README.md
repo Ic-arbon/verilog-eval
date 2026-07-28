@@ -106,16 +106,13 @@ Each trajectory runs in an isolated task workspace; reference solutions and
 hidden testbenches are not visible to the agent. The default `--sandbox auto`
 uses Bubblewrap when unprivileged user namespaces work and otherwise falls back
 to a read-only, capability-free Docker container. Use `--sandbox bwrap` or
-`--sandbox docker` to require one backend. After the agent exits, the supervisor
-stages `TopModule.sv` through VerilogEval's `--with-pregen` path and reuses the
-original Makefile, iverilog rules, and `sv-iv-analyze`. Commands, raw JSONL
-trajectories, agent metrics, and canonical summaries are written under
-`runs/agent-eval-*`. Summarize a completed run as text or JSON with:
-
-```sh
-./scripts/agent-eval-stats runs/agent-eval-<timestamp>
-./scripts/agent-eval-stats --json runs/agent-eval-<timestamp> > stats.json
-```
+`--sandbox docker` to require one backend. The Agent backend replaces only
+Make's `GENERATE_VERILOG` command: it maps the public benchmark prompt into an
+isolated workspace and maps the resulting `TopModule.sv` back to the standard
+sample path. The original Makefile, iverilog rules, hidden tests, and
+`sv-iv-analyze` remain the only grading path. Commands, raw JSONL trajectories,
+Agent sidecars, generation logs, and canonical summaries are written under
+`runs/agent-eval-*`.
 
 Generation settings accept the same configure-style names as model-only runs:
 `--with-task`, `--with-model`, `--with-problems`, `--with-samples`,
