@@ -215,9 +215,21 @@
           export XDG_CACHE_HOME="$VERILOG_EVAL_CACHE_ROOT"
           export npm_config_cache="$VERILOG_EVAL_CACHE_ROOT/npm"
 
-          verilog-agent-tools-setup
+          use_default_agent_tools=1
+          if [[ -n "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
+            use_default_agent_tools=0
+          else
+            for argument in "$@"; do
+              case "$argument" in
+                --agent-tools|--agent-tools=*) use_default_agent_tools=0 ;;
+              esac
+            done
+          fi
 
-          export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
+          if [[ "$use_default_agent_tools" == 1 ]]; then
+            verilog-agent-tools-setup
+            export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
+          fi
           export AGENT_EVAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap
           export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
           export AGENT_EVAL_DOCKER_IMAGE="${agentSandboxImageName}:${agentSandboxImageTag}"

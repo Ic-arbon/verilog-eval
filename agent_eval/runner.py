@@ -16,6 +16,10 @@ from typing import List, Optional, Sequence, Tuple
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from agent_eval.provenance import (
+    snapshot_agent_tools,
+    write_agent_source_provenance,
+)
 from agent_eval.sandbox import (
     nix_store_closure,
     required_store_roots,
@@ -97,6 +101,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--top-p", "--with-top-p", type=float, default=0.95)
     parser.add_argument("--base-url", default="http://127.0.0.1:58000/v1")
+    parser.add_argument(
+        "--agent-tools",
+        type=Path,
+        help="Local built Agent tools prefix to freeze and mount read-only",
+    )
+    parser.add_argument(
+        "--agent-source",
+        type=Path,
+        help="Local Git source associated with --agent-tools",
+    )
     parser.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
     parser.add_argument("--timeout", type=int, default=180)
     problems = parser.add_mutually_exclusive_group()
@@ -193,6 +207,10 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--with-temperature must be between 0 and 2")
     if not 0 < args.top_p <= 1:
         raise SystemExit("--with-top-p must be greater than 0 and at most 1")
+    if args.agent_tools is not None and args.agent == "all":
+        raise SystemExit("--agent-tools requires one explicit --agent")
+    if args.agent_source is not None and args.agent_tools is None:
+        raise SystemExit("--agent-source requires --agent-tools")
 
 
 def main() -> int:
@@ -241,6 +259,32 @@ def main() -> int:
         agent_root = run_root / agent
         build_dir = agent_root / "verilog-eval"
         build_dir.mkdir(parents=True, exist_ok=True)
+        agent_environment = environment.copy()
+        if args.agent_tools is not None:
+            snapshot = snapshot_agent_tools(
+                source=args.agent_tools,
+                destination=agent_root / "agent-tools-snapshot",
+                agent=agent,
+            )
+            agent_environment["AGENT_EVAL_AGENT_TOOLS"] = str(snapshot.path)
+            if args.agent_source is not None:
+                write_agent_source_provenance(
+                    source=args.agent_source,
+                    output_dir=agent_root,
+                    tools_digest=snapshot.digest,
+                )
+            else:
+                (agent_root / "agent-source.json").write_text(
+                    json.dumps(
+                        {
+                            "mode": "local-tools",
+                            "tools_digest": snapshot.digest,
+                            "tools_path": str(args.agent_tools.resolve()),
+                        },
+                        indent=2,
+                    )
+                    + "\n"
+                )
         configure, make = build_evaluation_commands(
             repo_root=repo_root,
             build_dir=build_dir,
@@ -269,7 +313,7 @@ def main() -> int:
             cwd=build_dir,
             capture_output=True,
             text=True,
-            env=environment,
+            env=agent_environment,
         )
         (agent_root / "configure.log").write_text(
             (configured.stdout or "") + (configured.stderr or "")
@@ -279,7 +323,7 @@ def main() -> int:
             return 1
 
         returncode = run_with_tee(
-            make, build_dir, agent_root / "make.log", environment
+            make, build_dir, agent_root / "make.log", agent_environment
         )
         if returncode != 0:
             print(f"[{agent}] make failed: {agent_root / 'make.log'}")

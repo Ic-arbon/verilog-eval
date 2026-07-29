@@ -128,6 +128,19 @@ Pi：
   --jobs 48
 ```
 
+使用本地构建的 Agent tools prefix：
+
+```bash
+./scripts/agent-eval \
+  --agent opencode \
+  --agent-tools=/opt/agent-tools-local/opencode \
+  --agent-source=/opt/src/opencode \
+  --problems Prob001_zero \
+  --run-root=runs/opencode-local-smoke
+```
+
+`--agent-tools` 目录必须包含 `node_modules/.bin/<agent>`，且内部 symlink 不得逃逸该目录。Runner 会先将完整 tools prefix 复制到 run 目录并校验 content digest；后续所有 sample 只读挂载该冻结快照。`--agent-source` 只用于记录 Git commit、dirty patch、untracked archive 和 lockfile digest，不会挂载进 Agent 容器。本地覆盖一次只能运行一个明确的 `--agent`。
+
 ## 5. 参数
 
 | 参数 | 默认值 | 说明 |
@@ -142,6 +155,8 @@ Pi：
 | `--jobs` | 最多 16 | 原版 Make 并发生成/评分任务数 |
 | `--timeout` | `180` | 单个外部 Agent CLI 的秒数上限 |
 | `--sandbox` | `auto` | `auto`、`bwrap` 或 `docker` |
+| `--agent-tools` | 内置固定版本 | 本地构建的 Agent tools prefix |
+| `--agent-source` | 未设置 | 与本地 tools 对应的 Git 源码目录 |
 | `--run-root` | 自动时间戳 | 结果根目录 |
 | `--dry-run` | 关闭 | 只写 configure/make 命令，不执行 |
 
@@ -155,6 +170,9 @@ Pi 0.82.1 没有公开 temperature/top-p CLI 参数，因此 Pi 使用 vLLM 服�
 runs/agent-eval-<UTC>/
 └── <agent>/
     ├── commands.json
+    ├── agent-source.json       # 使用本地 tools 时
+    ├── agent-source.patch      # 本地源码有 tracked 修改时
+    ├── agent-tools-snapshot/   # 冻结的本地构建产物
     ├── configure.log
     ├── make.log
     ├── summary.csv
