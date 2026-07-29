@@ -34,7 +34,8 @@ class BackendContractTests(unittest.TestCase):
         ])
         self.assertIn("--thinking", command)
         self.assertEqual(command[command.index("--agent") + 1], "benchmark")
-        self.assertEqual(adapter_profile("opencode"), "opencode-artifact-v3")
+        self.assertEqual(adapter_profile("opencode"), "opencode-artifact-v4")
+        self.assertEqual(adapter_profile("pi"), "pi-standard-v3")
 
     def test_unknown_backend_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown agent backend"):

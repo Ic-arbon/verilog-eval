@@ -10,7 +10,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional, Sequence
 
 if __package__ in {None, ""}:
     import sys
@@ -42,6 +42,82 @@ class CandidatePublication:
     status: str
     submitted: bool
     output_path: Path
+
+
+@dataclass(frozen=True)
+class AgentProcessResult:
+    status: str
+    exit_code: int
+    stdout: str
+    stderr: str
+
+
+def _decoded_output(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(errors="replace")
+    return value
+
+
+def cleanup_docker_container(cidfile: Path, docker_path: str) -> None:
+    """Force-remove a timed-out container without failing the evaluation."""
+    try:
+        container_id = cidfile.read_text().strip()
+    except OSError:
+        return
+    if not container_id:
+        return
+    try:
+        subprocess.run(
+            [docker_path, "rm", "--force", container_id],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def run_agent_process(
+    command: Sequence[str],
+    timeout: int,
+    cidfile: Optional[Path] = None,
+    docker_path: str = "docker",
+    run: Callable = subprocess.run,
+    cleanup: Callable[[Path, str], None] = cleanup_docker_container,
+) -> AgentProcessResult:
+    """Run one Agent process and contain timeout cleanup in one lifecycle."""
+    try:
+        completed = run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+        exit_code = completed.returncode
+        return AgentProcessResult(
+            status="completed" if exit_code == 0 else "agent_error",
+            exit_code=exit_code,
+            stdout=_decoded_output(completed.stdout),
+            stderr=_decoded_output(completed.stderr),
+        )
+    except subprocess.TimeoutExpired as error:
+        if cidfile is not None:
+            cleanup(cidfile, docker_path)
+        return AgentProcessResult(
+            status="timeout",
+            exit_code=124,
+            stdout=_decoded_output(error.stdout),
+            stderr=_decoded_output(error.stderr),
+        )
+    except OSError as error:
+        return AgentProcessResult(
+            status="agent_error",
+            exit_code=127,
+            stdout="",
+            stderr=str(error),
+        )
 
 
 def file_digest(path: Path) -> str:
@@ -171,8 +247,9 @@ def artifact_directory(
 def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifact: Path):
     write_agent_configs(
         prepared.workspace,
-        os.environ.get("AGENT_EVAL_BASE_URL", "http://127.0.0.1:58000/v1"),
-        args.model,
+        agent=args.agent,
+        base_url=os.environ.get("AGENT_EVAL_BASE_URL", "http://127.0.0.1:58000/v1"),
+        model=args.model,
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
@@ -181,7 +258,9 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
     environment = sandbox_environment(args.agent)
     tools_path = Path(os.environ["AGENT_EVAL_AGENT_TOOLS"])
 
+    cidfile = artifact / "container.cid"
     if args.sandbox_backend == "docker":
+        cidfile.unlink(missing_ok=True)
         command = build_docker_command(
             workspace=prepared.workspace.resolve(),
             agent_tools=tools_path.resolve(),
@@ -189,6 +268,7 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
             image=os.environ["AGENT_EVAL_DOCKER_IMAGE"],
             sandbox_path=os.environ["AGENT_EVAL_SANDBOX_PATH"],
             environment=environment,
+            cidfile=cidfile,
             docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
             uid=os.getuid(),
             gid=os.getgid(),
@@ -214,36 +294,21 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
     artifact.mkdir(parents=True, exist_ok=True)
     (artifact / "command.json").write_text(json.dumps(command, indent=2) + "\n")
     started = time.monotonic()
-    try:
-        completed = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=args.timeout,
-        )
-        stdout = completed.stdout or ""
-        stderr = completed.stderr or ""
-        exit_code = completed.returncode
-        status = "completed" if exit_code == 0 else "agent_error"
-    except subprocess.TimeoutExpired as error:
-        stdout = error.stdout or ""
-        stderr = error.stderr or ""
-        if isinstance(stdout, bytes):
-            stdout = stdout.decode(errors="replace")
-        if isinstance(stderr, bytes):
-            stderr = stderr.decode(errors="replace")
-        exit_code = 124
-        status = "timeout"
-    except OSError as error:
-        stdout = ""
-        stderr = str(error)
-        exit_code = 127
-        status = "agent_error"
-
+    process = run_agent_process(
+        command=command,
+        timeout=args.timeout,
+        cidfile=cidfile if args.sandbox_backend == "docker" else None,
+        docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
+    )
     duration = time.monotonic() - started
-    (artifact / "trajectory.jsonl").write_text(stdout)
-    (artifact / "stderr.log").write_text(stderr)
-    return status, exit_code, duration, parse_trajectory(args.agent, stdout.splitlines())
+    (artifact / "trajectory.jsonl").write_text(process.stdout)
+    (artifact / "stderr.log").write_text(process.stderr)
+    return (
+        process.status,
+        process.exit_code,
+        duration,
+        parse_trajectory(args.agent, process.stdout.splitlines()),
+    )
 
 
 def main() -> int:

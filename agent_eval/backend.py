@@ -4,8 +4,8 @@ from typing import List
 
 
 ADAPTER_PROFILES = {
-    "pi": "pi-standard-v2",
-    "opencode": "opencode-artifact-v3",
+    "pi": "pi-standard-v3",
+    "opencode": "opencode-artifact-v4",
 }
 
 
