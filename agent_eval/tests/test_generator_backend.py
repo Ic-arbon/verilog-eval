@@ -6,7 +6,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from agent_eval.backend import build_agent_command
+from agent_eval.backend import adapter_profile, build_agent_command
 from agent_eval.generate import main, prepare_generation_workspace, publish_candidate
 from agent_eval.models import TrajectoryMetrics
 from agent_eval.runner import build_evaluation_commands
@@ -21,6 +21,20 @@ class BackendContractTests(unittest.TestCase):
             self.assertEqual(command[-1], prompt)
             self.assertNotIn("<tool_call>", " ".join(command))
             self.assertNotIn("<function=read>", " ".join(command))
+
+    def test_opencode_uses_artifact_agent_with_diagnostics(self):
+        command = build_agent_command("opencode", "qwen3.6-coder", "task")
+
+        self.assertEqual(command[1:6], [
+            "--print-logs",
+            "--log-level",
+            "DEBUG",
+            "--pure",
+            "run",
+        ])
+        self.assertIn("--thinking", command)
+        self.assertEqual(command[command.index("--agent") + 1], "benchmark")
+        self.assertEqual(adapter_profile("opencode"), "opencode-artifact-v3")
 
     def test_unknown_backend_is_rejected(self):
         with self.assertRaisesRegex(ValueError, "unknown agent backend"):

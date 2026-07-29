@@ -31,8 +31,22 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(
                 pi["providers"]["vllm-local"]["models"][0]["maxTokens"], 4096
             )
-            self.assertEqual(opencode["agent"]["build"]["temperature"], 0.2)
-            self.assertEqual(opencode["agent"]["build"]["top_p"], 0.8)
+            benchmark = opencode["agent"]["benchmark"]
+            model = opencode["provider"]["vllm-local"]["models"]["qwen3.6-coder"]
+
+            self.assertEqual(benchmark["temperature"], 0.2)
+            self.assertEqual(benchmark["top_p"], 0.8)
+            self.assertEqual(benchmark["mode"], "primary")
+            self.assertEqual(benchmark["permission"]["edit"], "allow")
+            self.assertEqual(benchmark["permission"]["task"], "deny")
+            self.assertIn("Workspace files are the deliverables", benchmark["prompt"])
+            self.assertNotIn("tool_call", benchmark["prompt"])
+            self.assertTrue(model["temperature"])
+            self.assertTrue(model["reasoning"])
+            self.assertTrue(model["tool_call"])
+            self.assertEqual(
+                model["interleaved"], {"field": "reasoning_content"}
+            )
 
 
 class MetricsTests(unittest.TestCase):
