@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from agent_eval.config import write_agent_configs
+from agent_eval.generate import run_agent_process
 from agent_eval.metrics import parse_trajectory
 from agent_eval.sandbox import (
     build_docker_command,
@@ -14,23 +15,40 @@ from agent_eval.sandbox import (
 
 
 class ConfigTests(unittest.TestCase):
-    def test_configs_use_requested_model_and_limits(self):
+    def test_pi_workspace_contains_only_pi_config(self):
         with tempfile.TemporaryDirectory() as tmp:
             workspace = Path(tmp)
             write_agent_configs(
                 workspace,
+                agent="pi",
                 base_url="http://127.0.0.1:58000/v1",
                 model="qwen3.6-coder",
                 max_tokens=4096,
                 temperature=0.2,
                 top_p=0.8,
             )
-            pi = json.loads((workspace / ".pi-agent/models.json").read_text())
-            opencode = json.loads((workspace / "opencode.json").read_text())
 
+            pi = json.loads((workspace / ".pi-agent/models.json").read_text())
             self.assertEqual(
                 pi["providers"]["vllm-local"]["models"][0]["maxTokens"], 4096
             )
+            self.assertFalse((workspace / "opencode.json").exists())
+
+    def test_opencode_workspace_contains_only_opencode_config(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            write_agent_configs(
+                workspace,
+                agent="opencode",
+                base_url="http://127.0.0.1:58000/v1",
+                model="qwen3.6-coder",
+                max_tokens=4096,
+                temperature=0.2,
+                top_p=0.8,
+            )
+
+            self.assertFalse((workspace / ".pi-agent").exists())
+            opencode = json.loads((workspace / "opencode.json").read_text())
             benchmark = opencode["agent"]["benchmark"]
             model = opencode["provider"]["vllm-local"]["models"]["qwen3.6-coder"]
 
@@ -44,9 +62,7 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(model["temperature"])
             self.assertTrue(model["reasoning"])
             self.assertTrue(model["tool_call"])
-            self.assertEqual(
-                model["interleaved"], {"field": "reasoning_content"}
-            )
+            self.assertEqual(model["interleaved"], {"field": "reasoning_content"})
 
 
 class MetricsTests(unittest.TestCase):
@@ -96,8 +112,13 @@ class SandboxTests(unittest.TestCase):
             image="agent-sandbox:1",
             sandbox_path="/agent-tools/bin:/usr/bin",
             environment={},
+            cidfile=Path("/run/artifacts/container.cid"),
         )
         self.assertIn("--read-only", command)
+        self.assertEqual(
+            command[command.index("--cidfile") + 1],
+            "/run/artifacts/container.cid",
+        )
         self.assertIn("ALL", command)
         self.assertIn("no-new-privileges", command)
         self.assertNotIn("/var/run/docker.sock", " ".join(command))
@@ -117,6 +138,28 @@ class SandboxTests(unittest.TestCase):
         self.assertIn("/run/workspace /workspace", rendered)
         self.assertNotIn("dataset_spec-to-rtl", rendered)
         self.assertNotIn("_ref.sv", rendered)
+
+    def test_timeout_forces_docker_container_removal(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cidfile = Path(tmp) / "container.cid"
+            cidfile.write_text("abc123\n")
+
+            def time_out(_command, **_kwargs):
+                raise subprocess.TimeoutExpired(["docker", "run"], 10)
+
+            cleanup_calls = []
+
+            result = run_agent_process(
+                command=["docker", "run"],
+                timeout=10,
+                cidfile=cidfile,
+                docker_path="docker",
+                run=time_out,
+                cleanup=lambda path, docker: cleanup_calls.append((path, docker)),
+            )
+
+            self.assertEqual(result.status, "timeout")
+            self.assertEqual(cleanup_calls, [(cidfile, "docker")])
 
     def test_auto_backend_falls_back_to_docker(self):
         def fake_run(command, **_kwargs):
