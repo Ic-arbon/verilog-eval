@@ -39,6 +39,24 @@ class BackendContractTests(unittest.TestCase):
             adapter_profile("opencode", opencode_harness=True),
             "opencode-dcda-inline-v1",
         )
+        chip_command = build_agent_command(
+            "opencode",
+            "qwen3.6-coder",
+            "task",
+            opencode_primary_agent="chip-rtl",
+        )
+        self.assertEqual(
+            chip_command[chip_command.index("--agent") + 1],
+            "chip-rtl",
+        )
+        self.assertEqual(
+            adapter_profile(
+                "opencode",
+                opencode_harness=True,
+                opencode_primary_agent="chip-rtl",
+            ),
+            "opencode-dcda-chip-rtl-v1",
+        )
         self.assertEqual(adapter_profile("pi"), "pi-standard-v3")
 
     def test_unknown_backend_is_rejected(self):
@@ -173,6 +191,7 @@ class GeneratorCliTests(unittest.TestCase):
                 "--temperature=0.6",
                 "--top-p=0.95",
                 "--toolchain=base",
+                "--opencode-primary-agent=benchmark",
                 "--sandbox-backend=docker",
                 f"--artifact-root={artifacts}",
                 f"--output={output}",
@@ -211,6 +230,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
             temperature=0.6,
             top_p=0.95,
             toolchain="minimal-rtl",
+            opencode_primary_agent="chip-rtl",
             bash_path="/nix/store/bash/bin/bash",
             sandbox_backend="docker",
         )
@@ -220,6 +240,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
         self.assertIn("GENERATE_VERILOG=/repo/agent_eval/generate.py", make)
         self.assertTrue(any(item.startswith("GENERATE_FLAGS=") for item in make))
         self.assertIn("--toolchain=minimal-rtl", " ".join(make))
+        self.assertIn("--opencode-primary-agent=chip-rtl", " ".join(make))
         self.assertIn("sv-iv-analyze", make)
         self.assertIn("--jobs=48", make)
 
