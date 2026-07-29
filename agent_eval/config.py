@@ -48,10 +48,27 @@ def write_agent_configs(
     opencode_config = {
         "$schema": "https://opencode.ai/config.json",
         "agent": {
-            "build": {
+            "benchmark": {
+                "description": "Complete isolated workspace artifact tasks.",
+                "mode": "primary",
                 "temperature": temperature,
                 "top_p": top_p,
                 "steps": 20,
+                "prompt": (
+                    "You are a coding agent operating in an isolated workspace. "
+                    "Complete implementation tasks by using the available file "
+                    "tools to create or modify requested workspace artifacts. "
+                    "Workspace files are the deliverables; a text response does "
+                    "not satisfy a file-creation request. Before finishing, verify "
+                    "that the requested artifact exists."
+                ),
+                "permission": {
+                    "*": "deny",
+                    "read": "allow",
+                    "edit": "allow",
+                    "bash": "allow",
+                    "task": "deny",
+                },
             }
         },
         "provider": {
@@ -62,7 +79,10 @@ def write_agent_configs(
                 "models": {
                     model: {
                         "name": model,
+                        "temperature": True,
+                        "reasoning": True,
                         "tool_call": True,
+                        "interleaved": {"field": "reasoning_content"},
                         "limit": {"context": 262144, "output": max_tokens},
                     }
                 },

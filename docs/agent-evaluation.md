@@ -69,6 +69,8 @@ Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missin
 
 `agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
 
+OpenCode 使用 `opencode-artifact-v3` profile：专用 `benchmark` primary Agent 只开放 read/edit/bash 权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把旧 Adapter 结果误标为新结果。
+
 如果 Agent 没有产生有效 artifact，generator 会写入明确的失败占位样本，让完整 Make 批次继续，并保留真实状态：
 
 ```text

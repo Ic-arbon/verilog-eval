@@ -17,7 +17,7 @@ if __package__ in {None, ""}:
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from agent_eval.backend import build_agent_command
+from agent_eval.backend import adapter_profile, build_agent_command
 from agent_eval.config import write_agent_configs
 from agent_eval.metrics import parse_trajectory
 from agent_eval.sandbox import build_docker_command, build_sandbox_command
@@ -263,6 +263,7 @@ def main() -> int:
 
     record = {
         "agent": args.agent,
+        "adapter_profile": adapter_profile(args.agent),
         "problem": problem,
         "sample": output_path.stem,
         "status": publication.status,
@@ -278,6 +279,7 @@ def main() -> int:
     print(f"problem = {problem}")
     print(f"model = {args.model}")
     print(f"agent = {args.agent}")
+    print(f"adapter_profile = {adapter_profile(args.agent)}")
     print(f"agent_status = {publication.status}")
     print(f"submitted = {str(publication.submitted).lower()}")
     print(f"duration_seconds = {duration:.6f}")
