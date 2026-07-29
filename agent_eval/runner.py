@@ -22,11 +22,8 @@ from agent_eval.provenance import (
     write_agent_source_provenance,
     write_opencode_harness_provenance,
 )
-from agent_eval.sandbox import (
-    nix_store_closure,
-    required_store_roots,
-    select_sandbox_backend,
-)
+from agent_eval.sandbox import nix_store_closure, select_sandbox_backend
+from agent_eval.toolchain import required_commands, verify_docker_toolchain
 
 
 def build_evaluation_commands(
@@ -42,6 +39,7 @@ def build_evaluation_commands(
     max_tokens: int,
     temperature: float,
     top_p: float,
+    toolchain: str,
     bash_path: str,
     sandbox_backend: str,
 ) -> Tuple[List[str], List[str]]:
@@ -67,6 +65,7 @@ def build_evaluation_commands(
             f"--max-tokens={max_tokens}",
             f"--temperature={temperature}",
             f"--top-p={top_p}",
+            f"--toolchain={toolchain}",
             f"--sandbox-backend={sandbox_backend}",
             f"--artifact-root={artifact_root}",
         ]
@@ -117,6 +116,12 @@ def parse_args() -> argparse.Namespace:
         "--opencode-harness",
         type=Path,
         help="Git worktree containing an inline-skill OpenCode harness",
+    )
+    parser.add_argument(
+        "--toolchain",
+        choices=["base", "minimal-rtl"],
+        default="base",
+        help="Reproducible command set exposed inside the Agent sandbox",
     )
     parser.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
     parser.add_argument("--timeout", type=int, default=180)
@@ -234,6 +239,23 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--opencode-harness requires --agent opencode")
 
 
+def selected_toolchain_environment(profile: str) -> dict:
+    suffix = "BASE" if profile == "base" else "MINIMAL_RTL"
+    selected = {}
+    for name in (
+        "AGENT_EVAL_DOCKER_IMAGE",
+        "AGENT_EVAL_DOCKER_IMAGE_ARCHIVE",
+        "AGENT_EVAL_SANDBOX_PATH",
+        "AGENT_EVAL_STORE_ROOTS",
+    ):
+        source = f"{name}_{suffix}"
+        value = os.environ.get(source)
+        if value is None:
+            raise RuntimeError(f"missing toolchain runtime variable: {source}")
+        selected[name] = value
+    return selected
+
+
 def main() -> int:
     args = parse_args()
     validate_args(args)
@@ -247,7 +269,9 @@ def main() -> int:
         run_root, args.problems or [], args.problems_file
     )
 
+    toolchain_runtime = selected_toolchain_environment(args.toolchain)
     environment_image_id = ""
+    resolved_tools = {}
     if args.dry_run:
         sandbox_backend = "docker" if args.sandbox == "auto" else args.sandbox
     else:
@@ -261,18 +285,44 @@ def main() -> int:
         if sandbox_backend == "docker":
             environment_image_id = ensure_docker_image(
                 docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
-                image=os.environ["AGENT_EVAL_DOCKER_IMAGE"],
-                archive=Path(os.environ["AGENT_EVAL_DOCKER_IMAGE_ARCHIVE"]),
+                image=toolchain_runtime["AGENT_EVAL_DOCKER_IMAGE"],
+                archive=Path(toolchain_runtime["AGENT_EVAL_DOCKER_IMAGE_ARCHIVE"]),
+            )
+            resolved_tools = verify_docker_toolchain(
+                docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
+                image=toolchain_runtime["AGENT_EVAL_DOCKER_IMAGE"],
+                profile=args.toolchain,
             )
         else:
             environment_image_id = ""
 
     environment = os.environ.copy()
+    environment.update(toolchain_runtime)
     environment["AGENT_EVAL_BASE_URL"] = args.base_url
     environment["AGENT_EVAL_DOCKER_IMAGE_ID"] = environment_image_id
     if sandbox_backend == "bwrap":
-        store_paths = nix_store_closure(required_store_roots())
+        store_roots = [
+            Path(item)
+            for item in toolchain_runtime["AGENT_EVAL_STORE_ROOTS"].split()
+            if item
+        ]
+        store_paths = nix_store_closure(store_roots)
         environment["AGENT_EVAL_STORE_PATHS"] = "\n".join(map(str, store_paths))
+
+    (run_root / "toolchain.json").write_text(
+        json.dumps(
+            {
+                "profile": args.toolchain,
+                "required_commands": required_commands(args.toolchain),
+                "resolved_commands": resolved_tools,
+                "sandbox_backend": sandbox_backend,
+                "image": toolchain_runtime["AGENT_EVAL_DOCKER_IMAGE"],
+                "image_id": environment_image_id,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     agents = ["pi", "opencode"] if args.agent == "all" else [args.agent]
     print(f"Sandbox backend: {sandbox_backend}")
@@ -334,6 +384,7 @@ def main() -> int:
             max_tokens=args.max_tokens,
             temperature=args.temperature,
             top_p=args.top_p,
+            toolchain=args.toolchain,
             bash_path=os.environ.get("AGENT_EVAL_BASH", "/bin/bash"),
             sandbox_backend=sandbox_backend,
         )

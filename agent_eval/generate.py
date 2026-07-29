@@ -210,6 +210,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, required=True)
     parser.add_argument("--top-p", type=float, required=True)
     parser.add_argument(
+        "--toolchain",
+        choices=["base", "minimal-rtl"],
+        required=True,
+    )
+    parser.add_argument(
         "--sandbox-backend", choices=["bwrap", "docker"], required=True
     )
     parser.add_argument("--artifact-root", type=Path, required=True)
@@ -388,6 +393,7 @@ def main() -> int:
         "candidate": str(output_path),
         "workspace": str(prepared.workspace),
         "opencode_harness": str(harness) if harness is not None else None,
+        "toolchain": args.toolchain,
         "sandbox": {
             "backend": args.sandbox_backend,
             "uid": sandbox_uid,

@@ -172,6 +172,7 @@ class GeneratorCliTests(unittest.TestCase):
                 "--max-tokens=8192",
                 "--temperature=0.6",
                 "--top-p=0.95",
+                "--toolchain=base",
                 "--sandbox-backend=docker",
                 f"--artifact-root={artifacts}",
                 f"--output={output}",

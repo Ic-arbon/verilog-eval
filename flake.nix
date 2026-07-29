@@ -28,35 +28,52 @@
         which
         stdenv.cc.cc.lib
       ];
+      minimalRtlSandboxPackages = agentSandboxPackages ++ (with pkgs; [
+        verilator
+        yosys
+        abc-verifier
+        sby
+        sv-lang
+        surelog
+        haskellPackages.sv2v
+      ]);
       agentSandboxPath = pkgs.lib.makeBinPath agentSandboxPackages;
+      minimalRtlSandboxPath = pkgs.lib.makeBinPath minimalRtlSandboxPackages;
       agentStoreRoots = pkgs.lib.concatStringsSep " " (map toString agentSandboxPackages);
+      minimalRtlStoreRoots = pkgs.lib.concatStringsSep " " (map toString minimalRtlSandboxPackages);
       agentSandboxImageName = "verilog-eval-agent-sandbox";
-      agentSandboxImageTag = "v1";
-      agentSandboxImage = pkgs.dockerTools.buildLayeredImage {
-        name = agentSandboxImageName;
-        tag = agentSandboxImageTag;
-        contents = agentSandboxPackages;
-        extraCommands = ''
-          mkdir -p bin lib lib64 usr/bin home/agent workspace tmp
-          ln -sfn ${pkgs.bash}/bin/bash bin/bash
-          ln -sfn ${pkgs.bash}/bin/bash bin/sh
-          ln -sfn ${pkgs.coreutils}/bin/env usr/bin/env
-          ln -sfn ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2
-          ln -sfn ${pkgs.glibc}/lib/libc.so.6 lib/libc.so.6
-          ln -sfn ${pkgs.glibc}/lib/libpthread.so.0 lib/libpthread.so.0
-          ln -sfn ${pkgs.glibc}/lib/libdl.so.2 lib/libdl.so.2
-          ln -sfn ${pkgs.glibc}/lib/libm.so.6 lib/libm.so.6
-          chmod 1777 home/agent workspace tmp
-        '';
-        config = {
-          WorkingDir = "/workspace";
-          Env = [
-            "PATH=${agentSandboxPath}"
-            "HOME=/home/agent"
-            "SHELL=/bin/bash"
-          ];
+      mkAgentSandboxImage = tag: packages: sandboxPath:
+        pkgs.dockerTools.buildLayeredImage {
+          name = agentSandboxImageName;
+          inherit tag;
+          contents = packages;
+          extraCommands = ''
+            mkdir -p bin lib lib64 usr/bin home/agent workspace tmp
+            ln -sfn ${pkgs.bash}/bin/bash bin/bash
+            ln -sfn ${pkgs.bash}/bin/bash bin/sh
+            ln -sfn ${pkgs.coreutils}/bin/env usr/bin/env
+            ln -sfn ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 lib64/ld-linux-x86-64.so.2
+            ln -sfn ${pkgs.glibc}/lib/libc.so.6 lib/libc.so.6
+            ln -sfn ${pkgs.glibc}/lib/libpthread.so.0 lib/libpthread.so.0
+            ln -sfn ${pkgs.glibc}/lib/libdl.so.2 lib/libdl.so.2
+            ln -sfn ${pkgs.glibc}/lib/libm.so.6 lib/libm.so.6
+            chmod 1777 home/agent workspace tmp
+          '';
+          config = {
+            WorkingDir = "/workspace";
+            Env = [
+              "PATH=${sandboxPath}"
+              "HOME=/home/agent"
+              "SHELL=/bin/bash"
+            ];
+          };
         };
-      };
+      agentSandboxImageTag = "v1";
+      minimalRtlSandboxImageTag = "minimal-rtl-v1";
+      agentSandboxImage = mkAgentSandboxImage
+        agentSandboxImageTag agentSandboxPackages agentSandboxPath;
+      minimalRtlSandboxImage = mkAgentSandboxImage
+        minimalRtlSandboxImageTag minimalRtlSandboxPackages minimalRtlSandboxPath;
 
       pythonRequirements = pkgs.writeText "verilog-eval-requirements.txt" ''
         langchain==0.2.17
@@ -232,13 +249,17 @@
           fi
           export AGENT_EVAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap
           export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
-          export AGENT_EVAL_DOCKER_IMAGE="${agentSandboxImageName}:${agentSandboxImageTag}"
-          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE=${agentSandboxImage}
+          export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
+          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE_BASE=${agentSandboxImage}
+          export AGENT_EVAL_SANDBOX_PATH_BASE="/agent-tools/node_modules/.bin:${agentSandboxPath}"
+          export AGENT_EVAL_STORE_ROOTS_BASE="${agentStoreRoots}"
+          export AGENT_EVAL_DOCKER_IMAGE_MINIMAL_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
+          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE_MINIMAL_RTL=${minimalRtlSandboxImage}
+          export AGENT_EVAL_SANDBOX_PATH_MINIMAL_RTL="/agent-tools/node_modules/.bin:${minimalRtlSandboxPath}"
+          export AGENT_EVAL_STORE_ROOTS_MINIMAL_RTL="${minimalRtlStoreRoots}"
           export AGENT_EVAL_TRUE=${pkgs.coreutils}/bin/true
           export AGENT_EVAL_BASH=${pkgs.bash}/bin/bash
           export AGENT_EVAL_ENV=${pkgs.coreutils}/bin/env
-          export AGENT_EVAL_SANDBOX_PATH="/agent-tools/node_modules/.bin:${agentSandboxPath}"
-          export AGENT_EVAL_STORE_ROOTS="${agentStoreRoots}"
           export AGENT_EVAL_SANDBOX_LD_LIBRARY_PATH="${agentRuntimeLibraryPath}"
           export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
           export PYTHONPATH=${./.}
