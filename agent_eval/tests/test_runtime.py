@@ -8,6 +8,7 @@ from agent_eval.config import write_agent_configs
 from agent_eval.generate import run_agent_process
 from agent_eval.metrics import parse_trajectory
 from agent_eval.runner import ensure_docker_image
+from agent_eval.toolchain import required_commands, verify_docker_toolchain
 from agent_eval.sandbox import (
     build_docker_command,
     build_sandbox_command,
@@ -108,6 +109,40 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(metrics.tool_calls, 1)
         self.assertEqual(metrics.input_tokens, 80)
         self.assertEqual(metrics.output_tokens, 20)
+
+
+class ToolchainTests(unittest.TestCase):
+    def test_minimal_rtl_requires_reproducible_eda_commands(self):
+        self.assertEqual(
+            required_commands("minimal-rtl"),
+            (
+                "iverilog",
+                "verilator",
+                "yosys",
+                "abc",
+                "sby",
+                "slang",
+                "surelog",
+                "sv2v",
+            ),
+        )
+
+    def test_docker_preflight_rejects_missing_tool(self):
+        def fake_run(command, **_kwargs):
+            return subprocess.CompletedProcess(
+                command,
+                1,
+                "iverilog=/nix/store/iverilog/bin/iverilog\n",
+                "missing: verilator",
+            )
+
+        with self.assertRaisesRegex(RuntimeError, "missing: verilator"):
+            verify_docker_toolchain(
+                docker_path="docker",
+                image="agent-sandbox:minimal-rtl-v1",
+                profile="minimal-rtl",
+                run=fake_run,
+            )
 
 
 class SandboxTests(unittest.TestCase):

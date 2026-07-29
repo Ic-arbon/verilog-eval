@@ -209,6 +209,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
             max_tokens=8192,
             temperature=0.6,
             top_p=0.95,
+            toolchain="minimal-rtl",
             bash_path="/nix/store/bash/bin/bash",
             sandbox_backend="docker",
         )
@@ -217,6 +218,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
         self.assertNotIn("--with-pregen", " ".join(configure))
         self.assertIn("GENERATE_VERILOG=/repo/agent_eval/generate.py", make)
         self.assertTrue(any(item.startswith("GENERATE_FLAGS=") for item in make))
+        self.assertIn("--toolchain=minimal-rtl", " ".join(make))
         self.assertIn("sv-iv-analyze", make)
         self.assertIn("--jobs=48", make)
 
