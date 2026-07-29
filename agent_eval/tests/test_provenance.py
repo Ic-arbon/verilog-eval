@@ -5,7 +5,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_eval.provenance import snapshot_agent_tools, write_agent_source_provenance
+from agent_eval.provenance import (
+    snapshot_agent_tools,
+    snapshot_git_worktree,
+    write_agent_source_provenance,
+)
 
 
 class AgentToolsSnapshotTests(unittest.TestCase):
@@ -51,6 +55,45 @@ class AgentToolsSnapshotTests(unittest.TestCase):
                     destination=root / "snapshot",
                     agent="opencode",
                 )
+
+
+class HarnessSnapshotTests(unittest.TestCase):
+    def test_git_worktree_snapshot_excludes_git_and_freezes_dirty_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "harness"
+            source.mkdir()
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "config", "user.email", "test@example.com"],
+                check=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(source), "config", "user.name", "Test"],
+                check=True,
+            )
+            config = source / "opencode.json"
+            config.write_text('{"agent":{"chip-rtl":{"mode":"all"}}}\n')
+            skill = source / "plugins/rtl/skills/rtl-design/SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("# RTL skill\n")
+            subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "commit", "-qm", "initial"],
+                check=True,
+            )
+            skill.write_text("# Updated RTL skill\n")
+
+            snapshot = snapshot_git_worktree(source, root / "snapshot")
+            skill.write_text("# Changed after snapshot\n")
+
+            self.assertFalse((snapshot.path / ".git").exists())
+            self.assertEqual(
+                (snapshot.path / "plugins/rtl/skills/rtl-design/SKILL.md").read_text(),
+                "# Updated RTL skill\n",
+            )
+            self.assertEqual(len(snapshot.digest), 64)
+            self.assertTrue((snapshot.path / "opencode.json").is_file())
 
 
 class SourceProvenanceTests(unittest.TestCase):

@@ -47,6 +47,7 @@ class ConfigTests(unittest.TestCase):
                 max_tokens=4096,
                 temperature=0.2,
                 top_p=0.8,
+                opencode_harness=True,
             )
 
             self.assertFalse((workspace / ".pi-agent").exists())
@@ -58,7 +59,11 @@ class ConfigTests(unittest.TestCase):
             self.assertEqual(benchmark["top_p"], 0.8)
             self.assertEqual(benchmark["mode"], "primary")
             self.assertEqual(benchmark["permission"]["edit"], "allow")
-            self.assertEqual(benchmark["permission"]["task"], "deny")
+            self.assertEqual(
+                benchmark["permission"]["task"],
+                {"*": "deny", "chip-*": "allow"},
+            )
+            self.assertEqual(benchmark["permission"]["skill"], "deny")
             self.assertIn("Workspace files are the deliverables", benchmark["prompt"])
             self.assertNotIn("tool_call", benchmark["prompt"])
             self.assertTrue(model["temperature"])
@@ -115,8 +120,13 @@ class SandboxTests(unittest.TestCase):
             sandbox_path="/agent-tools/bin:/usr/bin",
             environment={},
             cidfile=Path("/run/artifacts/container.cid"),
+            opencode_harness=Path("/run/opencode-harness"),
         )
         self.assertIn("--read-only", command)
+        self.assertIn(
+            "/run/opencode-harness:/opencode-harness:ro",
+            command,
+        )
         self.assertEqual(
             command[command.index("--cidfile") + 1],
             "/run/artifacts/container.cid",
