@@ -7,9 +7,11 @@ from pathlib import Path
 from agent_eval.config import write_agent_configs
 from agent_eval.generate import run_agent_process
 from agent_eval.metrics import parse_trajectory
+from agent_eval.runner import ensure_docker_image
 from agent_eval.sandbox import (
     build_docker_command,
     build_sandbox_command,
+    sandbox_identity,
     select_sandbox_backend,
 )
 
@@ -139,6 +141,10 @@ class SandboxTests(unittest.TestCase):
         self.assertNotIn("dataset_spec-to-rtl", rendered)
         self.assertNotIn("_ref.sv", rendered)
 
+    def test_root_host_maps_to_non_root_container_user(self):
+        self.assertEqual(sandbox_identity(0, 0), (65534, 65534))
+        self.assertEqual(sandbox_identity(1000, 1000), (1000, 1000))
+
     def test_timeout_forces_docker_container_removal(self):
         with tempfile.TemporaryDirectory() as tmp:
             cidfile = Path(tmp) / "container.cid"
@@ -160,6 +166,26 @@ class SandboxTests(unittest.TestCase):
 
             self.assertEqual(result.status, "timeout")
             self.assertEqual(cleanup_calls, [(cidfile, "docker")])
+
+    def test_pinned_docker_archive_is_loaded_and_resolved_each_run(self):
+        calls = []
+
+        def fake_run(command, **_kwargs):
+            calls.append(command)
+            if "load" in command:
+                return subprocess.CompletedProcess(command, 0, "Loaded image\n", "")
+            return subprocess.CompletedProcess(command, 0, "sha256:fixed-image\n", "")
+
+        image_id = ensure_docker_image(
+            docker_path="docker",
+            image="agent-sandbox:v1",
+            archive=Path("/nix/store/sandbox.tar.gz"),
+            run=fake_run,
+        )
+
+        self.assertEqual(calls[0][1:3], ["load", "--input"])
+        self.assertIn("image", calls[1])
+        self.assertEqual(image_id, "sha256:fixed-image")
 
     def test_auto_backend_falls_back_to_docker(self):
         def fake_run(command, **_kwargs):
