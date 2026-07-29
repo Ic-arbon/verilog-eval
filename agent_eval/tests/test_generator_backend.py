@@ -57,6 +57,15 @@ class BackendContractTests(unittest.TestCase):
             ),
             "opencode-dcda-chip-rtl-v1",
         )
+        self.assertEqual(
+            adapter_profile(
+                "opencode",
+                opencode_harness=True,
+                opencode_primary_agent="chip-rtl",
+                opencode_thinking=False,
+            ),
+            "opencode-dcda-chip-rtl-no-thinking-v1",
+        )
         self.assertEqual(adapter_profile("pi"), "pi-standard-v3")
 
     def test_unknown_backend_is_rejected(self):
@@ -192,6 +201,7 @@ class GeneratorCliTests(unittest.TestCase):
                 "--top-p=0.95",
                 "--toolchain=base",
                 "--opencode-primary-agent=benchmark",
+                "--opencode-thinking=on",
                 "--sandbox-backend=docker",
                 f"--artifact-root={artifacts}",
                 f"--output={output}",
@@ -231,6 +241,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
             top_p=0.95,
             toolchain="minimal-rtl",
             opencode_primary_agent="chip-rtl",
+            opencode_thinking=False,
             bash_path="/nix/store/bash/bin/bash",
             sandbox_backend="docker",
         )
@@ -241,6 +252,7 @@ class MakeIntegrationContractTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("GENERATE_FLAGS=") for item in make))
         self.assertIn("--toolchain=minimal-rtl", " ".join(make))
         self.assertIn("--opencode-primary-agent=chip-rtl", " ".join(make))
+        self.assertIn("--opencode-thinking=off", " ".join(make))
         self.assertIn("sv-iv-analyze", make)
         self.assertIn("--jobs=48", make)
 

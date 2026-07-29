@@ -72,6 +72,24 @@ class ConfigTests(unittest.TestCase):
             self.assertTrue(model["tool_call"])
             self.assertEqual(model["interleaved"], {"field": "reasoning_content"})
 
+    def test_opencode_can_disable_qwen_thinking_at_request_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            write_agent_configs(
+                workspace,
+                agent="opencode",
+                base_url="http://127.0.0.1:58000/v1",
+                model="qwen3.6-coder",
+                opencode_thinking=False,
+            )
+
+            config = json.loads((workspace / "opencode.json").read_text())
+            model = config["provider"]["vllm-local"]["models"]["qwen3.6-coder"]
+            self.assertEqual(
+                model["options"],
+                {"chat_template_kwargs": {"enable_thinking": False}},
+            )
+
 
 class MetricsTests(unittest.TestCase):
     def test_pi_metrics_count_turns_tools_and_tokens(self):
