@@ -10,6 +10,7 @@ def write_agent_configs(
     max_tokens: int = 8192,
     temperature: float = 0.6,
     top_p: float = 0.95,
+    opencode_harness: bool = False,
 ) -> None:
     if agent == "pi":
         pi_dir = workspace / ".pi-agent"
@@ -72,7 +73,12 @@ def write_agent_configs(
                     "read": "allow",
                     "edit": "allow",
                     "bash": "allow",
-                    "task": "deny",
+                    "task": (
+                        {"*": "deny", "chip-*": "allow"}
+                        if opencode_harness
+                        else "deny"
+                    ),
+                    "skill": "deny",
                 },
             }
         },

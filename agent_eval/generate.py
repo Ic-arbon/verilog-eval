@@ -219,7 +219,28 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def sandbox_environment(agent: str) -> dict:
+def opencode_harness_path(agent: str) -> Optional[Path]:
+    raw = os.environ.get("AGENT_EVAL_OPENCODE_HARNESS")
+    if not raw:
+        return None
+    if agent != "opencode":
+        raise ValueError("OpenCode harness cannot be used by another backend")
+    harness = Path(raw).resolve()
+    if not (harness / "opencode.json").is_file():
+        raise FileNotFoundError(f"OpenCode harness config not found: {harness}")
+    return harness
+
+
+def stage_opencode_harness(workspace: Path, harness: Path) -> None:
+    """Expose public Harness support files without making the snapshot writable."""
+    for name in ("plugins", "docs", "tools"):
+        if (harness / name).exists():
+            (workspace / name).symlink_to(f"/opencode-harness/{name}")
+    if (harness / "memory").is_dir():
+        shutil.copytree(harness / "memory", workspace / "memory")
+
+
+def sandbox_environment(agent: str, harness: Optional[Path] = None) -> dict:
     environment = {
         "HOME": "/workspace/.home",
         "XDG_CACHE_HOME": "/workspace/.cache",
@@ -236,6 +257,9 @@ def sandbox_environment(agent: str) -> dict:
     }
     if agent == "pi":
         environment["PI_CODING_AGENT_DIR"] = "/workspace/.pi-agent"
+    if harness is not None:
+        environment["OPENCODE_CONFIG"] = "/opencode-harness/opencode.json"
+        environment["CHIP_DESIGN_MEMORY_ROOT"] = "/workspace/memory"
     return environment
 
 
@@ -250,6 +274,9 @@ def artifact_directory(
 
 
 def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifact: Path):
+    harness = opencode_harness_path(args.agent)
+    if harness is not None:
+        stage_opencode_harness(prepared.workspace, harness)
     write_agent_configs(
         prepared.workspace,
         agent=args.agent,
@@ -258,9 +285,10 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
         max_tokens=args.max_tokens,
         temperature=args.temperature,
         top_p=args.top_p,
+        opencode_harness=harness is not None,
     )
     agent_command = build_agent_command(args.agent, args.model, prepared.agent_prompt)
-    environment = sandbox_environment(args.agent)
+    environment = sandbox_environment(args.agent, harness)
     tools_path = Path(os.environ["AGENT_EVAL_AGENT_TOOLS"])
 
     cidfile = artifact / "container.cid"
@@ -282,6 +310,7 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
             sandbox_path=os.environ["AGENT_EVAL_SANDBOX_PATH"],
             environment=environment,
             cidfile=cidfile,
+            opencode_harness=harness,
             docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
             uid=container_uid,
             gid=container_gid,
@@ -301,6 +330,7 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
             bash_path=os.environ["AGENT_EVAL_BASH"],
             env_path=os.environ["AGENT_EVAL_ENV"],
             environment=environment,
+            opencode_harness=harness,
             bwrap_path=os.environ.get("AGENT_EVAL_BWRAP", "bwrap"),
         )
 
@@ -339,12 +369,16 @@ def main() -> int:
     status, exit_code, duration, metrics = execute_agent(args, prepared, artifact)
     publication = publish_candidate(prepared, output_path, status)
 
+    harness = opencode_harness_path(args.agent)
     sandbox_uid, sandbox_gid = os.getuid(), os.getgid()
     if args.sandbox_backend == "docker":
         sandbox_uid, sandbox_gid = sandbox_identity(sandbox_uid, sandbox_gid)
     record = {
         "agent": args.agent,
-        "adapter_profile": adapter_profile(args.agent),
+        "adapter_profile": adapter_profile(
+            args.agent,
+            opencode_harness=harness is not None,
+        ),
         "problem": problem,
         "sample": output_path.stem,
         "status": publication.status,
@@ -353,6 +387,7 @@ def main() -> int:
         "duration_seconds": duration,
         "candidate": str(output_path),
         "workspace": str(prepared.workspace),
+        "opencode_harness": str(harness) if harness is not None else None,
         "sandbox": {
             "backend": args.sandbox_backend,
             "uid": sandbox_uid,
@@ -366,7 +401,10 @@ def main() -> int:
     print(f"problem = {problem}")
     print(f"model = {args.model}")
     print(f"agent = {args.agent}")
-    print(f"adapter_profile = {adapter_profile(args.agent)}")
+    print(
+        "adapter_profile = "
+        + adapter_profile(args.agent, opencode_harness=harness is not None)
+    )
     print(f"agent_status = {publication.status}")
     print(f"submitted = {str(publication.submitted).lower()}")
     print(f"duration_seconds = {duration:.6f}")

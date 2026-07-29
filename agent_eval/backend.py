@@ -9,7 +9,9 @@ ADAPTER_PROFILES = {
 }
 
 
-def adapter_profile(agent: str) -> str:
+def adapter_profile(agent: str, opencode_harness: bool = False) -> str:
+    if agent == "opencode" and opencode_harness:
+        return "opencode-dcda-inline-v1"
     try:
         return ADAPTER_PROFILES[agent]
     except KeyError as error:

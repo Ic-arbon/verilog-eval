@@ -1,7 +1,7 @@
 import os
 import subprocess
 from pathlib import Path
-from typing import Callable, Dict, Iterable, List, Sequence
+from typing import Callable, Dict, Iterable, List, Optional, Sequence
 
 
 CommandRunner = Callable[..., subprocess.CompletedProcess]
@@ -98,6 +98,7 @@ def build_docker_command(
     sandbox_path: str,
     environment: Dict[str, str],
     cidfile: Path,
+    opencode_harness: Optional[Path] = None,
     docker_path: str = "docker",
     uid: int = 65534,
     gid: int = 65534,
@@ -137,6 +138,10 @@ def build_docker_command(
         "--env",
         "SHELL=/bin/bash",
     ]
+    if opencode_harness is not None:
+        command.extend(
+            ["--volume", f"{opencode_harness}:/opencode-harness:ro"]
+        )
     for key, value in sorted(environment.items()):
         command.extend(["--env", f"{key}={value}"])
     command.extend([image, *agent_command])
@@ -152,6 +157,7 @@ def build_sandbox_command(
     bash_path: str,
     env_path: str,
     environment: Dict[str, str],
+    opencode_harness: Optional[Path] = None,
     bwrap_path: str = "bwrap",
 ) -> List[str]:
     command = [
@@ -189,6 +195,11 @@ def build_sandbox_command(
     for system_path in (Path("/lib"), Path("/lib64")):
         if system_path.exists():
             command.extend(["--ro-bind", str(system_path), str(system_path)])
+
+    if opencode_harness is not None:
+        command.extend(
+            ["--ro-bind", str(opencode_harness), "/opencode-harness"]
+        )
 
     command.extend(
         [

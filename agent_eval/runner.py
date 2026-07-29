@@ -18,7 +18,9 @@ if __package__ in {None, ""}:
 
 from agent_eval.provenance import (
     snapshot_agent_tools,
+    snapshot_git_worktree,
     write_agent_source_provenance,
+    write_opencode_harness_provenance,
 )
 from agent_eval.sandbox import (
     nix_store_closure,
@@ -110,6 +112,11 @@ def parse_args() -> argparse.Namespace:
         "--agent-source",
         type=Path,
         help="Local Git source associated with --agent-tools",
+    )
+    parser.add_argument(
+        "--opencode-harness",
+        type=Path,
+        help="Git worktree containing an inline-skill OpenCode harness",
     )
     parser.add_argument("--jobs", type=int, default=min(16, os.cpu_count() or 1))
     parser.add_argument("--timeout", type=int, default=180)
@@ -223,6 +230,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--agent-tools requires one explicit --agent")
     if args.agent_source is not None and args.agent_tools is None:
         raise SystemExit("--agent-source requires --agent-tools")
+    if args.opencode_harness is not None and args.agent != "opencode":
+        raise SystemExit("--opencode-harness requires --agent opencode")
 
 
 def main() -> int:
@@ -276,6 +285,17 @@ def main() -> int:
         build_dir = agent_root / "verilog-eval"
         build_dir.mkdir(parents=True, exist_ok=True)
         agent_environment = environment.copy()
+        if args.opencode_harness is not None:
+            harness = snapshot_git_worktree(
+                source=args.opencode_harness,
+                destination=agent_root / "opencode-harness-snapshot",
+            )
+            agent_environment["AGENT_EVAL_OPENCODE_HARNESS"] = str(harness.path)
+            write_opencode_harness_provenance(
+                source=args.opencode_harness,
+                output_dir=agent_root,
+                harness_digest=harness.digest,
+            )
         if args.agent_tools is not None:
             snapshot = snapshot_agent_tools(
                 source=args.agent_tools,

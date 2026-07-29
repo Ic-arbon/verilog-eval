@@ -128,6 +128,59 @@ def _git_source_digest(repository: Path, paths: Iterable[str]) -> str:
     return _hash_paths(repository, files)
 
 
+def snapshot_git_worktree(source: Path, destination: Path) -> AgentToolsSnapshot:
+    """Freeze tracked and non-ignored untracked files from one Git worktree."""
+    source = source.resolve()
+    repository = Path(_git(source, "rev-parse", "--show-toplevel").strip()).resolve()
+    destination = destination.resolve()
+    try:
+        destination.relative_to(repository)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Harness snapshot cannot be created inside its source")
+
+    relative_paths = _git_paths(
+        repository,
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+    )
+    if "opencode.json" not in relative_paths:
+        raise FileNotFoundError(f"OpenCode harness config not tracked: {repository / 'opencode.json'}")
+
+    source_digest = _git_source_digest(repository, relative_paths)
+    if destination.exists():
+        shutil.rmtree(destination)
+    destination.mkdir(parents=True)
+
+    for relative in relative_paths:
+        source_path = repository / relative
+        destination_path = destination / relative
+        destination_path.parent.mkdir(parents=True, exist_ok=True)
+        if source_path.is_symlink():
+            resolved_target = source_path.resolve(strict=False)
+            try:
+                resolved_target.relative_to(repository)
+            except ValueError as error:
+                raise ValueError(
+                    f"symlink escapes Harness root: {source_path} -> {os.readlink(source_path)}"
+                ) from error
+            os.symlink(os.readlink(source_path), destination_path)
+        elif source_path.is_file():
+            shutil.copy2(source_path, destination_path)
+        else:
+            raise ValueError(f"unsupported file in Harness source: {source_path}")
+
+    snapshot_digest = directory_digest(destination)
+    current_digest = _git_source_digest(repository, relative_paths)
+    if snapshot_digest != source_digest or current_digest != source_digest:
+        shutil.rmtree(destination)
+        raise RuntimeError("Harness changed while the frozen snapshot was created")
+    return AgentToolsSnapshot(path=destination, digest=snapshot_digest)
+
+
 def _lockfile_digests(repository: Path) -> dict:
     result = {}
     for name in ("package-lock.json", "bun.lock", "bun.lockb", "pnpm-lock.yaml", "yarn.lock"):
@@ -135,6 +188,56 @@ def _lockfile_digests(repository: Path) -> dict:
         if path.is_file():
             result[name] = hashlib.sha256(path.read_bytes()).hexdigest()
     return result
+
+
+def write_opencode_harness_provenance(
+    source: Path,
+    output_dir: Path,
+    harness_digest: str,
+) -> dict:
+    """Record the Git state and configured Agents for an inline OpenCode harness."""
+    source = source.resolve()
+    repository = Path(_git(source, "rev-parse", "--show-toplevel").strip()).resolve()
+    resolved_commit = _git(repository, "rev-parse", "HEAD").strip()
+    status_output = _git(repository, "status", "--porcelain", "--untracked-files=all")
+    untracked = _git_paths(
+        repository,
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+    )
+    config = json.loads((repository / "opencode.json").read_text())
+    agents = sorted(config.get("agent", {}))
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    patch = _git(repository, "diff", "--binary", "HEAD")
+    if patch:
+        (output_dir / "opencode-harness.patch").write_text(patch)
+    if untracked:
+        with tarfile.open(output_dir / "opencode-harness-untracked.tar", "w") as archive:
+            for relative in untracked:
+                archive.add(repository / relative, arcname=relative, recursive=False)
+
+    metadata = {
+        "mode": "inline",
+        "source": str(source),
+        "repository": str(repository),
+        "resolved_commit": resolved_commit,
+        "dirty": bool(status_output.strip()),
+        "harness_digest": harness_digest,
+        "config_digest": hashlib.sha256(
+            (repository / "opencode.json").read_bytes()
+        ).hexdigest(),
+        "agents": agents,
+        "agent_count": len(agents),
+        "skills": "inlined-in-agent-prompts",
+        "lockfile_digests": _lockfile_digests(repository),
+        "untracked_files": untracked,
+    }
+    (output_dir / "opencode-harness.json").write_text(
+        json.dumps(metadata, indent=2) + "\n"
+    )
+    return metadata
 
 
 def write_agent_source_provenance(

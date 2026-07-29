@@ -69,7 +69,7 @@ Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missin
 
 `agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
 
-OpenCode 使用专用 `benchmark` primary Agent，只开放 read/edit/bash 权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。当前 profile 为 `opencode-artifact-v4`；Pi 为 `pi-standard-v3`。每个 workspace 只包含当前 Agent 的配置。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把不同 Adapter 结果混合。
+OpenCode 使用专用 `benchmark` primary Agent，只开放 read/edit/bash权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。默认 profile 为 `opencode-artifact-v4`；加载 inline-skill Digital Chip Design Agents Harness 时为 `opencode-dcda-inline-v1`；Pi 为 `pi-standard-v3`。每个 workspace 只包含当前 Agent 的配置。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把不同 Adapter/Harness 结果混合。
 
 如果 Agent 没有产生有效 artifact，generator 会写入明确的失败占位样本，让完整 Make 批次继续，并保留真实状态：
 
@@ -141,6 +141,19 @@ Pi：
 
 `--agent-tools` 目录必须包含 `node_modules/.bin/<agent>`，且内部 symlink 不得逃逸该目录。Runner 会先将完整 tools prefix 复制到 run 目录并校验 content digest；后续所有 sample 只读挂载该冻结快照。`--agent-source` 只用于记录 Git commit、dirty patch、untracked archive 和 lockfile digest，不会挂载进 Agent 容器。本地覆盖一次只能运行一个明确的 `--agent`。
 
+加载 inline-skill OpenCode Harness：
+
+```bash
+./scripts/agent-eval \
+  --agent opencode \
+  --opencode-harness=/opt/agent/digital-chip-design-agents \
+  --problems Prob001_zero \
+  --timeout 300 \
+  --run-root=runs/opencode-dcda-smoke
+```
+
+Runner 只复制该 Git工作树中 tracked 和非 ignored 的 untracked文件，拒绝逃逸 Harness 根目录的 symlink，并将冻结快照只读挂载到 `/opencode-harness`。Harness `opencode.json` 中的全部 `chip-*` Agent 会被加载；其 skills 已内联在 Agent prompt 中，因此 `skill` tool 继续禁用。`benchmark` 只能通过 `task` 调用 `chip-*`，不能调用其他 subagent。
+
 ## 5. 参数
 
 | 参数 | 默认值 | 说明 |
@@ -157,6 +170,7 @@ Pi：
 | `--sandbox` | `auto` | `auto`、`bwrap` 或 `docker` |
 | `--agent-tools` | 内置固定版本 | 本地构建的 Agent tools prefix |
 | `--agent-source` | 未设置 | 与本地 tools 对应的 Git 源码目录 |
+| `--opencode-harness` | 未设置 | inline-skill OpenCode Harness Git工作树 |
 | `--run-root` | 自动时间戳 | 结果根目录 |
 | `--dry-run` | 关闭 | 只写 configure/make 命令，不执行 |
 
@@ -172,7 +186,9 @@ runs/agent-eval-<UTC>/
     ├── commands.json
     ├── agent-source.json       # 使用本地 tools 时
     ├── agent-source.patch      # 本地源码有 tracked 修改时
-    ├── agent-tools-snapshot/   # 冻结的本地构建产物
+    ├── agent-tools-snapshot/      # 冻结的本地构建产物
+    ├── opencode-harness.json      # Harness commit/digest/Agent清单
+    ├── opencode-harness-snapshot/ # 冻结的 Harness工作树
     ├── configure.log
     ├── make.log
     ├── summary.csv
