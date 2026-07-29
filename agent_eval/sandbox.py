@@ -7,6 +7,19 @@ from typing import Callable, Dict, Iterable, List, Sequence
 CommandRunner = Callable[..., subprocess.CompletedProcess]
 
 
+def sandbox_identity(host_uid: int, host_gid: int) -> tuple:
+    """Never propagate host root into the Docker sandbox."""
+    if host_uid == 0:
+        return 65534, 65534
+    return host_uid, host_gid
+
+
+def assign_workspace_ownership(workspace: Path, uid: int, gid: int) -> None:
+    """Make a root-created workspace writable by its mapped sandbox user."""
+    for path in [workspace, *workspace.rglob("*")]:
+        os.chown(path, uid, gid, follow_symlinks=False)
+
+
 def nix_store_closure(store_roots: Sequence[Path]) -> List[Path]:
     if not store_roots:
         return []

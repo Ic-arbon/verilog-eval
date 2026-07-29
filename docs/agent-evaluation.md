@@ -231,6 +231,8 @@ PID limit
 no Docker socket
 ```
 
+每次运行开始时都会重新加载 Nix 生成的固定镜像 archive，并把解析后的 Docker image ID 写入 `agent.json`。若宿主进程 UID 为 0，容器会映射到 `65534:65534`，单题 workspace 在启动前转移给该用户。每个容器使用独立 `container.cid`；Agent timeout 后 generator 会执行 `docker rm --force`，防止遗留容器继续占用 vLLM。
+
 Bubblewrap 只挂载选定 Nix store closure、动态加载器、Agent 工具和当前工作区。若宿主禁止 unprivileged user namespaces，`--sandbox auto` 会在启动任何 generation request 前回退到 Docker。
 
 ## 8. 旧结果

@@ -20,7 +20,12 @@ if __package__ in {None, ""}:
 from agent_eval.backend import adapter_profile, build_agent_command
 from agent_eval.config import write_agent_configs
 from agent_eval.metrics import parse_trajectory
-from agent_eval.sandbox import build_docker_command, build_sandbox_command
+from agent_eval.sandbox import (
+    assign_workspace_ownership,
+    build_docker_command,
+    build_sandbox_command,
+    sandbox_identity,
+)
 
 
 SUBMISSION_CONTRACT = """\
@@ -259,7 +264,15 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
     tools_path = Path(os.environ["AGENT_EVAL_AGENT_TOOLS"])
 
     cidfile = artifact / "container.cid"
+    host_uid, host_gid = os.getuid(), os.getgid()
+    container_uid, container_gid = sandbox_identity(host_uid, host_gid)
     if args.sandbox_backend == "docker":
+        if (container_uid, container_gid) != (host_uid, host_gid):
+            assign_workspace_ownership(
+                prepared.workspace,
+                container_uid,
+                container_gid,
+            )
         cidfile.unlink(missing_ok=True)
         command = build_docker_command(
             workspace=prepared.workspace.resolve(),
@@ -270,8 +283,8 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
             environment=environment,
             cidfile=cidfile,
             docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
-            uid=os.getuid(),
-            gid=os.getgid(),
+            uid=container_uid,
+            gid=container_gid,
         )
     else:
         store_paths = [
@@ -326,6 +339,9 @@ def main() -> int:
     status, exit_code, duration, metrics = execute_agent(args, prepared, artifact)
     publication = publish_candidate(prepared, output_path, status)
 
+    sandbox_uid, sandbox_gid = os.getuid(), os.getgid()
+    if args.sandbox_backend == "docker":
+        sandbox_uid, sandbox_gid = sandbox_identity(sandbox_uid, sandbox_gid)
     record = {
         "agent": args.agent,
         "adapter_profile": adapter_profile(args.agent),
@@ -337,6 +353,12 @@ def main() -> int:
         "duration_seconds": duration,
         "candidate": str(output_path),
         "workspace": str(prepared.workspace),
+        "sandbox": {
+            "backend": args.sandbox_backend,
+            "uid": sandbox_uid,
+            "gid": sandbox_gid,
+            "image_id": os.environ.get("AGENT_EVAL_DOCKER_IMAGE_ID", ""),
+        },
         "metrics": asdict(metrics),
     }
     (artifact / "agent.json").write_text(json.dumps(record, indent=2) + "\n")

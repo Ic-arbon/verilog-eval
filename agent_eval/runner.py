@@ -139,21 +139,33 @@ def check_vllm(base_url: str) -> None:
             raise RuntimeError(f"vLLM health check returned HTTP {response.status}")
 
 
-def ensure_docker_image(docker_path: str, image: str, archive: Path) -> None:
-    inspect = subprocess.run(
-        [docker_path, "image", "inspect", image],
-        capture_output=True,
-        text=True,
-    )
-    if inspect.returncode == 0:
-        return
-    loaded = subprocess.run(
+def ensure_docker_image(
+    docker_path: str,
+    image: str,
+    archive: Path,
+    run=subprocess.run,
+) -> str:
+    """Load the pinned Nix archive and return the resolved Docker image ID."""
+    loaded = run(
         [docker_path, "load", "--input", str(archive)],
         capture_output=True,
         text=True,
     )
     if loaded.returncode != 0:
         raise RuntimeError(f"failed to load sandbox image: {loaded.stderr.strip()}")
+    inspected = run(
+        [docker_path, "image", "inspect", "--format", "{{.Id}}", image],
+        capture_output=True,
+        text=True,
+    )
+    if inspected.returncode != 0:
+        raise RuntimeError(
+            f"failed to resolve sandbox image ID: {inspected.stderr.strip()}"
+        )
+    image_id = inspected.stdout.strip()
+    if not image_id:
+        raise RuntimeError("Docker returned an empty sandbox image ID")
+    return image_id
 
 
 def write_problem_file(
@@ -226,6 +238,7 @@ def main() -> int:
         run_root, args.problems or [], args.problems_file
     )
 
+    environment_image_id = ""
     if args.dry_run:
         sandbox_backend = "docker" if args.sandbox == "auto" else args.sandbox
     else:
@@ -237,14 +250,17 @@ def main() -> int:
             true_path=os.environ.get("AGENT_EVAL_TRUE", "true"),
         )
         if sandbox_backend == "docker":
-            ensure_docker_image(
+            environment_image_id = ensure_docker_image(
                 docker_path=os.environ.get("AGENT_EVAL_DOCKER", "docker"),
                 image=os.environ["AGENT_EVAL_DOCKER_IMAGE"],
                 archive=Path(os.environ["AGENT_EVAL_DOCKER_IMAGE_ARCHIVE"]),
             )
+        else:
+            environment_image_id = ""
 
     environment = os.environ.copy()
     environment["AGENT_EVAL_BASE_URL"] = args.base_url
+    environment["AGENT_EVAL_DOCKER_IMAGE_ID"] = environment_image_id
     if sandbox_backend == "bwrap":
         store_paths = nix_store_closure(required_store_roots())
         environment["AGENT_EVAL_STORE_PATHS"] = "\n".join(map(str, store_paths))
