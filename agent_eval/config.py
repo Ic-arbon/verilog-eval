@@ -11,6 +11,7 @@ def write_agent_configs(
     temperature: float = 0.6,
     top_p: float = 0.95,
     opencode_harness: bool = False,
+    opencode_thinking: bool = True,
 ) -> None:
     if agent == "pi":
         pi_dir = workspace / ".pi-agent"
@@ -94,6 +95,11 @@ def write_agent_configs(
                         "reasoning": True,
                         "tool_call": True,
                         "interleaved": {"field": "reasoning_content"},
+                        "options": {
+                            "chat_template_kwargs": {
+                                "enable_thinking": opencode_thinking,
+                            }
+                        },
                         "limit": {"context": 262144, "output": max_tokens},
                     }
                 },

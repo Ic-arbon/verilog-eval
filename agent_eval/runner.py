@@ -41,6 +41,7 @@ def build_evaluation_commands(
     top_p: float,
     toolchain: str,
     opencode_primary_agent: str,
+    opencode_thinking: bool,
     bash_path: str,
     sandbox_backend: str,
 ) -> Tuple[List[str], List[str]]:
@@ -68,6 +69,7 @@ def build_evaluation_commands(
             f"--top-p={top_p}",
             f"--toolchain={toolchain}",
             f"--opencode-primary-agent={opencode_primary_agent}",
+            f"--opencode-thinking={'on' if opencode_thinking else 'off'}",
             f"--sandbox-backend={sandbox_backend}",
             f"--artifact-root={artifact_root}",
         ]
@@ -118,6 +120,12 @@ def parse_args() -> argparse.Namespace:
         "--opencode-harness",
         type=Path,
         help="Git worktree containing an inline-skill OpenCode harness",
+    )
+    parser.add_argument(
+        "--opencode-thinking",
+        choices=["on", "off"],
+        default="on",
+        help="Enable or disable Qwen thinking in the vLLM request",
     )
     parser.add_argument(
         "--opencode-primary-agent",
@@ -245,6 +253,8 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--agent-source requires --agent-tools")
     if args.opencode_harness is not None and args.agent != "opencode":
         raise SystemExit("--opencode-harness requires --agent opencode")
+    if args.opencode_thinking == "off" and args.agent != "opencode":
+        raise SystemExit("--opencode-thinking=off requires --agent opencode")
     if args.opencode_primary_agent != "benchmark" and (
         args.agent != "opencode" or args.opencode_harness is None
     ):
@@ -401,6 +411,7 @@ def main() -> int:
             top_p=args.top_p,
             toolchain=args.toolchain,
             opencode_primary_agent=args.opencode_primary_agent,
+            opencode_thinking=args.opencode_thinking == "on",
             bash_path=os.environ.get("AGENT_EVAL_BASH", "/bin/bash"),
             sandbox_backend=sandbox_backend,
         )

@@ -13,15 +13,26 @@ def adapter_profile(
     agent: str,
     opencode_harness: bool = False,
     opencode_primary_agent: str = "benchmark",
+    opencode_thinking: bool = True,
 ) -> str:
     if agent == "opencode" and opencode_primary_agent != "benchmark":
         if not opencode_harness:
             raise ValueError("a chip-* primary requires an OpenCode harness")
         if opencode_primary_agent == "chip-rtl":
-            return "opencode-dcda-chip-rtl-v1"
+            return (
+                "opencode-dcda-chip-rtl-v1"
+                if opencode_thinking
+                else "opencode-dcda-chip-rtl-no-thinking-v1"
+            )
         raise ValueError(f"unsupported OpenCode primary Agent: {opencode_primary_agent}")
     if agent == "opencode" and opencode_harness:
-        return "opencode-dcda-inline-v1"
+        return (
+            "opencode-dcda-inline-v1"
+            if opencode_thinking
+            else "opencode-dcda-inline-no-thinking-v1"
+        )
+    if agent == "opencode" and not opencode_thinking:
+        return "opencode-artifact-no-thinking-v1"
     try:
         return ADAPTER_PROFILES[agent]
     except KeyError as error:

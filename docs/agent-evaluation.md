@@ -69,7 +69,7 @@ Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missin
 
 `agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
 
-OpenCode 使用专用 `benchmark` primary Agent，只开放 read/edit/bash权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。默认 profile 为 `opencode-artifact-v4`；加载 inline-skill Digital Chip Design Agents Harness 并保留自然路由时为 `opencode-dcda-inline-v1`；显式选择 `chip-rtl` primary时为 `opencode-dcda-chip-rtl-v1`；Pi 为 `pi-standard-v3`。每个 workspace 只包含当前 Agent 的配置。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把不同 Adapter/Harness 结果混合。
+OpenCode 使用专用 `benchmark` primary Agent，只开放 read/edit/bash权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。默认 profile 为 `opencode-artifact-v4`；加载 inline-skill Digital Chip Design Agents Harness 并保留自然路由时为 `opencode-dcda-inline-v1`；显式选择 `chip-rtl` primary时为 `opencode-dcda-chip-rtl-v1`；关闭Qwen thinking时分别使用独立的 `*-no-thinking-v1` profile；Pi 为 `pi-standard-v3`。每个 workspace 只包含当前 Agent 的配置。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把不同 Adapter/Harness 结果混合。
 
 如果 Agent 没有产生有效 artifact，generator 会写入明确的失败占位样本，让完整 Make 批次继续，并保留真实状态：
 
@@ -153,7 +153,7 @@ Pi：
   --run-root=runs/opencode-dcda-smoke
 ```
 
-Runner 只复制该 Git工作树中 tracked 和非 ignored 的 untracked文件，拒绝逃逸 Harness 根目录的 symlink，并将冻结快照只读挂载到 `/opencode-harness`。Harness `opencode.json` 中的全部 `chip-*` Agent 会被加载；其 skills 已内联在 Agent prompt 中，因此 `skill` tool 继续禁用。`benchmark` 只能通过 `task` 调用 `chip-*`，不能调用其他 subagent。自然路由使用 `opencode-dcda-inline-v1`；显式 `--opencode-primary-agent=chip-rtl` 使用独立的 `opencode-dcda-chip-rtl-v1`。两种结果不能合并。
+Runner 只复制该 Git工作树中 tracked 和非 ignored 的 untracked文件，拒绝逃逸 Harness 根目录的 symlink，并将冻结快照只读挂载到 `/opencode-harness`。Harness `opencode.json` 中的全部 `chip-*` Agent 会被加载；其 skills 已内联在 Agent prompt 中，因此 `skill` tool 继续禁用。`benchmark` 只能通过 `task` 调用 `chip-*`，不能调用其他 subagent。自然路由使用 `opencode-dcda-inline-v1`；显式 `--opencode-primary-agent=chip-rtl` 使用独立的 `opencode-dcda-chip-rtl-v1`。`--opencode-thinking=off` 再使用对应的 `*-no-thinking-v1` profile。OpenCode CLI的 `--thinking` 只控制reasoning事件显示，不会关闭模型thinking，因此仍保留它用于诊断；真正开关由request-level `chat_template_kwargs.enable_thinking` 控制。不同profile结果不能合并。
 
 仓库提供公开复杂题集 `problem-sets/spec-to-rtl-complex-5.txt`，用于匹配的自然路由/显式RTL入口A/B测试。选题只基于公开 prompt，包含 ConwayLife、gshare、PS/2数据FSM、Lemmings4和FancyTimer。
 
@@ -175,6 +175,7 @@ Runner 只复制该 Git工作树中 tracked 和非 ignored 的 untracked文件�
 | `--agent-source` | 未设置 | 与本地 tools 对应的 Git 源码目录 |
 | `--opencode-harness` | 未设置 | inline-skill OpenCode Harness Git工作树 |
 | `--opencode-primary-agent` | `benchmark` | `benchmark`自然路由或显式 `chip-rtl` |
+| `--opencode-thinking` | `on` | 通过 vLLM `chat_template_kwargs.enable_thinking` 控制Qwen thinking |
 | `--toolchain` | `base` | `base` 或 `minimal-rtl` Agent沙箱工具集 |
 | `--run-root` | 自动时间戳 | 结果根目录 |
 | `--dry-run` | 关闭 | 只写 configure/make 命令，不执行 |

@@ -210,6 +210,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, required=True)
     parser.add_argument("--top-p", type=float, required=True)
     parser.add_argument(
+        "--opencode-thinking",
+        choices=["on", "off"],
+        required=True,
+    )
+    parser.add_argument(
         "--opencode-primary-agent",
         choices=["benchmark", "chip-rtl"],
         required=True,
@@ -296,6 +301,7 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
         temperature=args.temperature,
         top_p=args.top_p,
         opencode_harness=harness is not None,
+        opencode_thinking=args.opencode_thinking == "on",
     )
     if args.opencode_primary_agent != "benchmark" and harness is None:
         raise ValueError("a chip-* primary requires an OpenCode harness")
@@ -396,6 +402,7 @@ def main() -> int:
             args.agent,
             opencode_harness=harness is not None,
             opencode_primary_agent=args.opencode_primary_agent,
+            opencode_thinking=args.opencode_thinking == "on",
         ),
         "problem": problem,
         "sample": output_path.stem,
@@ -407,6 +414,7 @@ def main() -> int:
         "workspace": str(prepared.workspace),
         "opencode_harness": str(harness) if harness is not None else None,
         "opencode_primary_agent": args.opencode_primary_agent,
+        "opencode_thinking": args.opencode_thinking == "on",
         "toolchain": args.toolchain,
         "sandbox": {
             "backend": args.sandbox_backend,
@@ -427,6 +435,7 @@ def main() -> int:
             args.agent,
             opencode_harness=harness is not None,
             opencode_primary_agent=args.opencode_primary_agent,
+            opencode_thinking=args.opencode_thinking == "on",
         )
     )
     print(f"agent_status = {publication.status}")
