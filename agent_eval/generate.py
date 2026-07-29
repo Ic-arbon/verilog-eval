@@ -210,6 +210,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--temperature", type=float, required=True)
     parser.add_argument("--top-p", type=float, required=True)
     parser.add_argument(
+        "--opencode-primary-agent",
+        choices=["benchmark", "chip-rtl"],
+        required=True,
+    )
+    parser.add_argument(
         "--toolchain",
         choices=["base", "minimal-rtl"],
         required=True,
@@ -292,7 +297,14 @@ def execute_agent(args: argparse.Namespace, prepared: PreparedWorkspace, artifac
         top_p=args.top_p,
         opencode_harness=harness is not None,
     )
-    agent_command = build_agent_command(args.agent, args.model, prepared.agent_prompt)
+    if args.opencode_primary_agent != "benchmark" and harness is None:
+        raise ValueError("a chip-* primary requires an OpenCode harness")
+    agent_command = build_agent_command(
+        args.agent,
+        args.model,
+        prepared.agent_prompt,
+        opencode_primary_agent=args.opencode_primary_agent,
+    )
     environment = sandbox_environment(args.agent, harness)
     tools_path = Path(os.environ["AGENT_EVAL_AGENT_TOOLS"])
 
@@ -383,6 +395,7 @@ def main() -> int:
         "adapter_profile": adapter_profile(
             args.agent,
             opencode_harness=harness is not None,
+            opencode_primary_agent=args.opencode_primary_agent,
         ),
         "problem": problem,
         "sample": output_path.stem,
@@ -393,6 +406,7 @@ def main() -> int:
         "candidate": str(output_path),
         "workspace": str(prepared.workspace),
         "opencode_harness": str(harness) if harness is not None else None,
+        "opencode_primary_agent": args.opencode_primary_agent,
         "toolchain": args.toolchain,
         "sandbox": {
             "backend": args.sandbox_backend,
@@ -409,7 +423,11 @@ def main() -> int:
     print(f"agent = {args.agent}")
     print(
         "adapter_profile = "
-        + adapter_profile(args.agent, opencode_harness=harness is not None)
+        + adapter_profile(
+            args.agent,
+            opencode_harness=harness is not None,
+            opencode_primary_agent=args.opencode_primary_agent,
+        )
     )
     print(f"agent_status = {publication.status}")
     print(f"submitted = {str(publication.submitted).lower()}")

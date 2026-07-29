@@ -9,7 +9,17 @@ ADAPTER_PROFILES = {
 }
 
 
-def adapter_profile(agent: str, opencode_harness: bool = False) -> str:
+def adapter_profile(
+    agent: str,
+    opencode_harness: bool = False,
+    opencode_primary_agent: str = "benchmark",
+) -> str:
+    if agent == "opencode" and opencode_primary_agent != "benchmark":
+        if not opencode_harness:
+            raise ValueError("a chip-* primary requires an OpenCode harness")
+        if opencode_primary_agent == "chip-rtl":
+            return "opencode-dcda-chip-rtl-v1"
+        raise ValueError(f"unsupported OpenCode primary Agent: {opencode_primary_agent}")
     if agent == "opencode" and opencode_harness:
         return "opencode-dcda-inline-v1"
     try:
@@ -18,7 +28,12 @@ def adapter_profile(agent: str, opencode_harness: bool = False) -> str:
         raise ValueError(f"unknown agent backend: {agent}") from error
 
 
-def build_agent_command(agent: str, model: str, prompt: str) -> List[str]:
+def build_agent_command(
+    agent: str,
+    model: str,
+    prompt: str,
+    opencode_primary_agent: str = "benchmark",
+) -> List[str]:
     """Translate a neutral benchmark task into one external CLI invocation."""
     if agent == "pi":
         return [
@@ -59,7 +74,7 @@ def build_agent_command(agent: str, model: str, prompt: str) -> List[str]:
             "--model",
             f"vllm-local/{model}",
             "--agent",
-            "benchmark",
+            opencode_primary_agent,
             prompt,
         ]
     raise ValueError(f"unknown agent backend: {agent}")

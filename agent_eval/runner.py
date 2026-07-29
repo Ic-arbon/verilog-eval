@@ -40,6 +40,7 @@ def build_evaluation_commands(
     temperature: float,
     top_p: float,
     toolchain: str,
+    opencode_primary_agent: str,
     bash_path: str,
     sandbox_backend: str,
 ) -> Tuple[List[str], List[str]]:
@@ -66,6 +67,7 @@ def build_evaluation_commands(
             f"--temperature={temperature}",
             f"--top-p={top_p}",
             f"--toolchain={toolchain}",
+            f"--opencode-primary-agent={opencode_primary_agent}",
             f"--sandbox-backend={sandbox_backend}",
             f"--artifact-root={artifact_root}",
         ]
@@ -116,6 +118,12 @@ def parse_args() -> argparse.Namespace:
         "--opencode-harness",
         type=Path,
         help="Git worktree containing an inline-skill OpenCode harness",
+    )
+    parser.add_argument(
+        "--opencode-primary-agent",
+        choices=["benchmark", "chip-rtl"],
+        default="benchmark",
+        help="Primary Agent selected by the external OpenCode CLI",
     )
     parser.add_argument(
         "--toolchain",
@@ -237,6 +245,13 @@ def validate_args(args: argparse.Namespace) -> None:
         raise SystemExit("--agent-source requires --agent-tools")
     if args.opencode_harness is not None and args.agent != "opencode":
         raise SystemExit("--opencode-harness requires --agent opencode")
+    if args.opencode_primary_agent != "benchmark" and (
+        args.agent != "opencode" or args.opencode_harness is None
+    ):
+        raise SystemExit(
+            "a chip-* --opencode-primary-agent requires --agent opencode "
+            "and --opencode-harness"
+        )
 
 
 def selected_toolchain_environment(profile: str) -> dict:
@@ -385,6 +400,7 @@ def main() -> int:
             temperature=args.temperature,
             top_p=args.top_p,
             toolchain=args.toolchain,
+            opencode_primary_agent=args.opencode_primary_agent,
             bash_path=os.environ.get("AGENT_EVAL_BASH", "/bin/bash"),
             sandbox_backend=sandbox_backend,
         )
