@@ -75,12 +75,13 @@
             exit 2
           fi
 
-          # Default to the benchmark's low-temperature Pass@1 configuration.
+          # Default to one sample using the local Qwen sampling configuration.
           # Later user arguments override these defaults.
           configure_args=(
             --with-samples=1
             --with-temperature=0.6
             --with-top-p=0.95
+            --with-max-tokens=8192
             "$@"
           )
           config_key="$(

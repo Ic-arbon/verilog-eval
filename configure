@@ -590,6 +590,7 @@ LIBOBJS
 pregen_dir
 problems_file
 dataset_dir
+max_tokens
 top_p
 temperature
 samples
@@ -646,6 +647,7 @@ with_task
 with_samples
 with_temperature
 with_top_p
+with_max_tokens
 with_dataset
 with_problems
 with_pregen_dir
@@ -1270,6 +1272,7 @@ Optional Packages:
   --with-samples          Number of samples for each problem
   --with-temperature      Temperature of model
   --with-top-p            Top-p of model
+  --with-max-tokens       Maximum number of model response tokens
   --with-dataset          Directory with dataset files
   --with-problems         File with list of problems
   --with-pregen-dir       Directory for storing pregen files
@@ -1877,6 +1880,22 @@ fi
 { $as_echo "$as_me:${as_lineno-$LINENO}: using top-p: ${top_p}" >&5
 $as_echo "$as_me: using top-p: ${top_p}" >&6;}
 
+#-------------------------------------------------------------------------
+# --with-max-tokens
+#-------------------------------------------------------------------------
+
+
+# Check whether --with-max-tokens was given.
+if test "${with_max_tokens+set}" = set; then :
+  withval=$with_max_tokens; max_tokens="${with_max_tokens}"
+else
+  max_tokens=1024
+fi
+
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using max tokens: ${max_tokens}" >&5
+$as_echo "$as_me: using max tokens: ${max_tokens}" >&6;}
 
 #-------------------------------------------------------------------------
 # dataset
