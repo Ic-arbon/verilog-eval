@@ -24,6 +24,7 @@ sandbox     = docker
 | OpenCode (`opencode-artifact-v3`) | 180s | 87/156 = 55.77% | 129/156 = 82.69% | 87/129 = 67.44% | 73 |
 | Pi (`pi-standard-v2`) | 300s | **103/156 = 66.03%** | **148/156 = 94.87%** | 103/148 = 69.59% | **5** |
 | OpenCode (`opencode-artifact-v3`) | 300s | **103/156 = 66.03%** | 145/156 = 92.95% | **103/145 = 71.03%** | 12 |
+| OpenCode DCDA (`opencode-dcda-chip-rtl-no-thinking-v1`) | 600s | **114/156 = 73.08%** | **156/156 = 100.00%** | **114/156 = 73.08%** | **2** |
 
 The model-only result is currently recorded as an approximate value. It should not be presented as an exact reproduced result until its canonical summary and complete run configuration are attached.
 
@@ -226,3 +227,86 @@ G–H: 2697f50 (request-level Qwen thinking control)
 ```
 
 B's first command was interrupted before the evaluation-start banner and then rerun into the same named directory. The completed run contains all five sidecars and canonical summaries, but the matrix remains labeled exploratory.
+
+## Full `chip-rtl` no-thinking run (I)
+
+After A–H, the H configuration was run across all 156 `spec-to-rtl` problems:
+
+```text
+primary      = chip-rtl
+thinking     = off
+max_tokens   = 16,384
+timeout       = 600s
+jobs          = 48
+toolchain     = minimal-rtl
+temperature   = 0.6
+top_p         = 0.95
+samples       = 1
+profile       = opencode-dcda-chip-rtl-no-thinking-v1
+```
+
+### Result
+
+| Metric | I |
+| --- | ---: |
+| Pass@1 | **114/156 = 73.08%** |
+| Submitted | **156/156 = 100.00%** |
+| Conditional pass rate | 114/156 = 73.08% |
+| Completed | 154 |
+| Agent timeouts | 2 |
+| Submitted at timeout | 2/2 |
+| Passed at timeout | 1/2 |
+| Sidecars | 156/156 |
+| Parse errors | 0 |
+
+VerilogEval symbols:
+
+```text
+. = 114
+C =   2
+R =  25
+S =   6
+T =   3
+e =   1
+p =   1
+w =   4
+```
+
+Agent timeout status and VerilogEval's `T` symbol are separate dimensions. Both timed-out Agent samples still contained publishable artifacts, and one passed original grading.
+
+### Resource use
+
+| Metric | Total | Average/sample |
+| --- | ---: | ---: |
+| Duration | 21,179.737s | 135.768s |
+| Turns | 670 | 4.295 |
+| Tool calls | 533 | 3.417 |
+| Input tokens | 10,281,056 | 65,904.205 |
+| Output tokens | 274,178 | 1,757.551 |
+| Total tokens | 10,555,234 | 67,661.756 |
+
+The 156 samples ran concurrently, so 21,179.737 seconds is the sum of sample durations rather than elapsed wall time.
+
+### Comparison with the earlier full OpenCode run
+
+| Metric | OpenCode v3, 300s | I | Difference |
+| --- | ---: | ---: | ---: |
+| Pass@1 | 103/156 (66.03%) | 114/156 (73.08%) | +11 passes, +7.05 points |
+| Submitted | 145/156 (92.95%) | 156/156 (100%) | +11 submissions |
+| Conditional pass rate | 71.03% | 73.08% | +2.05 points |
+| Agent timeouts | 12 | 2 | -10 |
+| Average duration | 162.110s | 135.768s | -16.2% |
+| Tool calls | 254 | 533 | 2.10× |
+| Total tokens | 1,951,600 | 10,555,234 | 5.41× |
+
+This is not a matched causal comparison. I simultaneously changes the Adapter/Harness, Qwen thinking mode, output limit, timeout, and toolchain. Its higher score therefore cannot be attributed to `chip-rtl` alone. Temperature 0.6 also makes the two runs independent stochastic samples.
+
+The complex-five subset inside I scores 1/5: ConwayLife passes, while gshare, PS/2 data, Lemmings4, and FancyTimer fail. H scored 2/5 on the same prompts. This within-configuration variation reinforces that one sample per task is insufficient for a stable efficacy estimate.
+
+### Run provenance
+
+```text
+I: /opt/agent/verilog-eval/runs/agent-eval-20260729T102105Z
+```
+
+The run directory contains the canonical summary, all 156 generator sidecars, frozen Agent/Harness provenance, and per-sample trajectories. The exact evaluator and Harness commits recorded there are authoritative for reproducing I.
