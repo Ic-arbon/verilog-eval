@@ -81,6 +81,10 @@ openai_models = [
   "gpt-4o",
 ]
 
+openai_compatible_models = [
+  "qwen3.6-coder",
+]
+
 nim_chat_models = [
   "ai-llama2-70b",
   "ai-llama3-70b",
@@ -213,6 +217,12 @@ def main():
       print( f" - {model}" )
 
     print( "" )
+    print( "OpenAI-Compatible Models" )
+
+    for model in openai_compatible_models:
+      print( f" - {model}" )
+
+    print( "" )
     print( "NIM Models" )
 
     for model in nim_chat_models:
@@ -238,7 +248,7 @@ def main():
   if opts.model in model_aliases:
     model = model_aliases[opts.model]
 
-  if model not in openai_models + nim_chat_models + manual_models:
+  if model not in openai_models + openai_compatible_models + nim_chat_models + manual_models:
     print("")
     print(f"ERROR: Unknown model {model}")
     print("")
@@ -349,7 +359,7 @@ def main():
 
   # Query the LLM
 
-  if model in openai_models:
+  if model in openai_models + openai_compatible_models:
     llm = ChatOpenAI(
       model       = model,
       temperature = temperature,

@@ -53,6 +53,26 @@ You will also need the following Python packages:
 
 We plan to provide a Dockerfile and backwards compatibility mode with a prebuilt jsonl soon.
 
+### Local OpenAI-Compatible Model
+
+The `local-model-qwen` branch accepts `qwen3.6-coder` through the existing
+`ChatOpenAI` provider while preserving the model's real identity. Point the
+client at an already-running OpenAI-compatible server; this does not start or
+modify the server:
+
+```sh
+export OPENAI_API_BASE="http://127.0.0.1:58000/v1"
+export OPENAI_API_KEY="local" # replace when the endpoint requires a real key
+printf 'Prob001_zero\n' >/tmp/verilog-eval-smoke.txt
+nix run .#eval -- \
+  --with-model=qwen3.6-coder \
+  --with-task=spec-to-rtl \
+  --with-problems=/tmp/verilog-eval-smoke.txt
+```
+
+The model ID returned by the server's `/v1/models` endpoint must be
+`qwen3.6-coder`.
+
 ### Usage 
 
 The evalution harness is run using make and various evaluation parameters can be set as below:
