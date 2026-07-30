@@ -1,4 +1,5 @@
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -174,10 +175,15 @@ class GeneratorCliTests(unittest.TestCase):
             artifacts = root / "artifacts"
             prompt.write_text("Implement TopModule with output zero.")
 
-            def fake_execute(_args, prepared, _artifact):
+            def fake_execute(_args, prepared, artifact):
                 (prepared.workspace / "TopModule.sv").write_text(
                     "module TopModule(output zero); assign zero=0; endmodule\n"
                 )
+                npm_cache = prepared.workspace / ".cache/npm"
+                npm_cache.mkdir(parents=True)
+                (npm_cache / "duplicated-runtime-cache").write_bytes(b"cache")
+                (artifact / "trajectory.jsonl").write_text('{"type":"step_finish"}\n')
+                (artifact / "stderr.log").write_text("")
                 return (
                     "completed",
                     0,
@@ -222,6 +228,11 @@ class GeneratorCliTests(unittest.TestCase):
                 / "opencode/Prob001_zero/sample01/agent.json"
             )
             self.assertTrue(sidecar.is_file())
+            self.assertTrue((sidecar.parent / "trajectory.jsonl").is_file())
+            self.assertFalse((sidecar.parent / "workspace").exists())
+            record = json.loads(sidecar.read_text())
+            self.assertIsNone(record["workspace"])
+            self.assertEqual(record["workspace_policy"], "ephemeral-v1")
 
 
 class MakeIntegrationContractTests(unittest.TestCase):
