@@ -165,6 +165,12 @@ def prepare_generation_workspace(
     )
 
 
+def cleanup_generation_workspace(workspace: Path) -> None:
+    """Remove runtime state after the formal candidate has been published."""
+    if workspace.exists():
+        shutil.rmtree(workspace)
+
+
 def publish_candidate(
     prepared: PreparedWorkspace,
     output_path: Path,
@@ -389,8 +395,11 @@ def main() -> int:
         problem=problem,
         workspace=artifact / "workspace",
     )
-    status, exit_code, duration, metrics = execute_agent(args, prepared, artifact)
-    publication = publish_candidate(prepared, output_path, status)
+    try:
+        status, exit_code, duration, metrics = execute_agent(args, prepared, artifact)
+        publication = publish_candidate(prepared, output_path, status)
+    finally:
+        cleanup_generation_workspace(prepared.workspace)
 
     harness = opencode_harness_path(args.agent)
     sandbox_uid, sandbox_gid = os.getuid(), os.getgid()
@@ -411,7 +420,8 @@ def main() -> int:
         "exit_code": exit_code,
         "duration_seconds": duration,
         "candidate": str(output_path),
-        "workspace": str(prepared.workspace),
+        "workspace": None,
+        "workspace_policy": "ephemeral-v1",
         "opencode_harness": str(harness) if harness is not None else None,
         "opencode_primary_agent": args.opencode_primary_agent,
         "opencode_thinking": args.opencode_thinking == "on",

@@ -65,7 +65,8 @@ Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missin
 3. 调用 `agent_eval/backend.py` 生成 Pi 或 OpenCode CLI 命令；
 4. 在 Bubblewrap 或 Docker 中执行 Agent；
 5. 将 `TopModule.sv` 发布到 Make 指定的 sample 路径；
-6. 写入 token、turn、tool、状态和轨迹 sidecar。
+6. 删除单题临时 workspace，包括 npm cache、OpenCode数据库和工具临时输出；
+7. 完成 token、turn、tool、状态和轨迹 sidecar。
 
 `agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
 
@@ -211,10 +212,7 @@ runs/agent-eval-<UTC>/
             ├── agent.json
             ├── command.json
             ├── trajectory.jsonl
-            ├── stderr.log
-            └── workspace/
-                ├── TASK.md
-                └── TopModule.sv
+            └── stderr.log
 ```
 
 每次运行还会在根目录写入 `toolchain.json`。`minimal-rtl` profile 在生成第一题前验证以下命令全部存在，否则立即停止：
@@ -238,6 +236,8 @@ Agent 行为读取：
 ```
 
 `timeout` 时如果已经写出 `TopModule.sv`，candidate 仍会进入原版评分，同时 `agent.json` 保留 `status=timeout`。
+
+单题 workspace 使用 `ephemeral-v1` 保留策略。正式 candidate 已发布且根轨迹已写出后，整个 workspace 都会删除，避免每题持久化约150MB npm cache；随后 `agent.json` 记录 `workspace=null` 和 `workspace_policy=ephemeral-v1`。需要长期保存的诊断必须显式写入 sample sidecar目录，不能依赖 OpenCode数据库或其他运行时缓存。
 
 生成汇总统计：
 
