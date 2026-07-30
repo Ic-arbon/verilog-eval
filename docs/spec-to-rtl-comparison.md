@@ -287,6 +287,38 @@ Agent timeout status and VerilogEval's `T` symbol are separate dimensions. Both 
 
 The 156 samples ran concurrently, so 21,179.737 seconds is the sum of sample durations rather than elapsed wall time.
 
+### Root tool-call audit
+
+The 533 root-session tool calls break down as follows:
+
+| Tool | Calls |
+| --- | ---: |
+| `bash` | 206 |
+| `write` | 202 |
+| `read` | 91 |
+| `todowrite` | 15 |
+| `glob` | 10 |
+| `edit` | 8 |
+| `invalid` | 1 |
+| `task` | 0 |
+
+Only 20/156 samples (12.82%) contain EDA-related shell lines, totaling 110 extracted lines. These lines include real compile/lint/simulation/synthesis commands as well as discovery, version, and help commands; they must not all be counted as successful validation. Actual root-session invocation was observed for Icarus Verilog/`vvp`, Verilator, Slang, Yosys, and sv2v. Surelog was discovered with `which` but not executed; ABC and SymbiYosys were not executed.
+
+The 20 EDA-active problems score 13/20 (65%). The other 136 problems score 101/136 (74.26%). This is not evidence that EDA reduces correctness: the Agent selects tools non-randomly for harder tasks, so task difficulty confounds the comparison.
+
+The audit found repeated or ineffective commands, including four identical Icarus compile/simulation calls for `Prob131_mt2015_q4`, repeated Verilator lint calls, multiple Slang option forms followed by `slang --help` and a bare invocation, and compile failures masked with `|| true`. `Prob149_ece241_2013_q4` performed many generated-testbench simulations but still failed original grading.
+
+`Prob030_popcount255` provides a concrete false-test example. Its generated testbench expected 255 set bits from `255'h7FFFFFFFF`, which contains only 35 set bits, and expected 127 from `255'h7FFFFFFFFFFFFFFFF`, which contains only 67. The safe forms are `{255{1'b1}}` and `{{128{1'b0}}, {127{1'b1}}}`. Separately, the trajectory contained a malformed `</parameter` shell fragment and one tool call was classified as `invalid`.
+
+Exact root-session inputs are retained under the run directory:
+
+```text
+opencode/tool-call-report/root-tool-calls.jsonl
+opencode/tool-call-report/bash-commands.txt
+opencode/tool-call-report/eda-commands.txt
+opencode/tool-call-report/eda-invocations.tsv
+```
+
 ### Comparison with the earlier full OpenCode run
 
 | Metric | OpenCode v3, 300s | I | Difference |
