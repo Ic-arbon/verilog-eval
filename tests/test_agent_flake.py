@@ -38,6 +38,14 @@ class AgentFlakeIntegrationTests(unittest.TestCase):
         self.assertIn("VERILOG_EVAL_SOURCE_DIFF_SHA256", agent_app)
         self.assertIn("AGENT_EVAL_DOCKER_IMAGE_ID", agent_app)
         self.assertIn("AGENT_EVAL_AGENT_TOOLS_VERSIONS", agent_app)
+        self.assertNotIn(
+            'export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$(',
+            agent_app,
+        )
+        self.assertNotIn(
+            'export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$(',
+            agent_app,
+        )
         self.assertNotIn("AGENT_EVAL_STORE_ROOTS", agent_app)
 
     def test_build_hashes_include_source_and_endpoint_provenance(self):
