@@ -19,6 +19,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("nix run", source)
         self.assertIn("--with-generator=agent", source)
         self.assertIn("--with-problems=", source)
+        self.assertIn('chmod -R u+w "$scratch"', source)
+        self.assertIn('rm -rf "$scratch" || true', source)
 
     def test_smoke_searches_for_hidden_grader_and_host_capabilities(self):
         source = SMOKE_SCRIPT.read_text()
