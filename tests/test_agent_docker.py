@@ -1,0 +1,184 @@
+from __future__ import annotations
+
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_generation.contracts import AgentEnvironment, AgentProcessSpec
+from agent_generation.docker import DockerExecutor, DockerInfrastructureError
+
+
+class RecordingRunner:
+    def __init__(self, returncode=0, stdout="ok\n", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.calls = []
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((tuple(command), kwargs))
+        return subprocess.CompletedProcess(
+            command,
+            self.returncode,
+            stdout=self.stdout,
+            stderr=self.stderr,
+        )
+
+
+class TimeoutRunner:
+    def __init__(self):
+        self.calls = []
+        self.removed_before_return = False
+
+    def __call__(self, command, **kwargs):
+        self.calls.append((tuple(command), kwargs))
+        if len(command) > 1 and command[1] == "run":
+            cidfile = Path(command[command.index("--cidfile") + 1])
+            cidfile.write_text("abcdef1234567890\n")
+            raise subprocess.TimeoutExpired(
+                command,
+                kwargs["timeout"],
+                output="partial trajectory\n",
+                stderr="deadline\n",
+            )
+        self.removed_before_return = command[1:3] == ["rm", "--force"]
+        return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+
+class DockerExecutorTests(unittest.TestCase):
+    def make_fixture(self, root: Path, runner=None):
+        workspace = root / "runtime" / "sample"
+        tools = root / "agent-tools"
+        workspace.mkdir(parents=True)
+        tools.mkdir()
+        executor = DockerExecutor(
+            docker_path="/nix/store/docker/bin/docker",
+            image="verilog-eval-agent:clean-v1",
+            agent_tools=tools,
+            uid=1000,
+            gid=1000,
+            runner=runner or RecordingRunner(),
+            host_environment={"VLLM_API_KEY": "host-secret-not-in-argv"},
+        )
+        spec = AgentProcessSpec(
+            command=("/agent-tools/node_modules/.bin/fake", "run"),
+            workspace=workspace,
+            timeout_seconds=30,
+            environment=AgentEnvironment(
+                variables=(
+                    ("HOME", "/workspace/.home"),
+                    ("OPENCODE_CONFIG", "/workspace/.agent-config/opencode.json"),
+                ),
+                inherit=("VLLM_API_KEY",),
+            ),
+        )
+        return executor, spec, tools
+
+    def test_command_has_required_isolation_and_only_expected_mounts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executor, spec, tools = self.make_fixture(root)
+            cidfile = root / "container.cid"
+
+            command = executor.build_command(spec, cidfile)
+            command_text = " ".join(command)
+
+            self.assertEqual(command[:2], ("/nix/store/docker/bin/docker", "run"))
+            self.assertIn("--rm", command)
+            self.assertIn("--read-only", command)
+            self.assertIn("--cap-drop=ALL", command)
+            self.assertIn("--security-opt=no-new-privileges", command)
+            self.assertIn("--pids-limit=256", command)
+            self.assertIn("--user=1000:1000", command)
+            self.assertIn("--workdir=/workspace", command)
+            self.assertIn("--network=host", command)
+            self.assertIn("--tmpfs=/tmp:rw,noexec,nosuid,nodev,size=256m", command)
+            self.assertIn(
+                f"type=bind,src={spec.workspace.resolve()},dst=/workspace",
+                command,
+            )
+            self.assertIn(
+                f"type=bind,src={tools.resolve()},dst=/agent-tools,readonly",
+                command,
+            )
+            self.assertEqual(command.count("--mount"), 2)
+            self.assertIn("HOME=/workspace/.home", command)
+            self.assertIn("VLLM_API_KEY", command)
+            self.assertNotIn("host-secret-not-in-argv", command_text)
+            self.assertNotIn("_ref.sv", command_text)
+            self.assertNotIn("_test.sv", command_text)
+            self.assertNotIn("docker.sock", command_text)
+            self.assertEqual(
+                command[-3:],
+                (
+                    "verilog-eval-agent:clean-v1",
+                    "/agent-tools/node_modules/.bin/fake",
+                    "run",
+                ),
+            )
+
+    def test_completed_and_nonzero_processes_are_normalized(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for returncode, expected_status in ((0, "completed"), (7, "error")):
+                with self.subTest(returncode=returncode):
+                    runner = RecordingRunner(
+                        returncode=returncode,
+                        stdout="trajectory\n",
+                        stderr="diagnostic\n",
+                    )
+                    executor, spec, _tools = self.make_fixture(
+                        root / str(returncode), runner=runner
+                    )
+
+                    result = executor.run(spec)
+
+                    self.assertEqual(result.status, expected_status)
+                    self.assertEqual(result.exit_code, returncode)
+                    self.assertEqual(result.stdout, "trajectory\n")
+                    self.assertEqual(result.stderr, "diagnostic\n")
+                    self.assertIsNone(result.usage.input_tokens)
+                    self.assertEqual(len(runner.calls), 1)
+                    self.assertFalse(
+                        Path(
+                            runner.calls[0][0][runner.calls[0][0].index("--cidfile") + 1]
+                        ).exists()
+                    )
+
+    def test_timeout_force_removes_container_before_returning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = TimeoutRunner()
+            executor, spec, _tools = self.make_fixture(Path(tmp), runner=runner)
+
+            result = executor.run(spec)
+
+            self.assertEqual(result.status, "timeout")
+            self.assertEqual(result.exit_code, 124)
+            self.assertEqual(result.stdout, "partial trajectory\n")
+            self.assertEqual(result.stderr, "deadline\n")
+            self.assertTrue(runner.removed_before_return)
+            self.assertEqual(runner.calls[1][0][1:4], ("rm", "--force", "abcdef1234567890"))
+
+    def test_missing_inherited_secret_fails_before_docker_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = RecordingRunner()
+            executor, spec, tools = self.make_fixture(Path(tmp), runner=runner)
+            executor = DockerExecutor(
+                docker_path="docker",
+                image="image:tag",
+                agent_tools=tools,
+                uid=1000,
+                gid=1000,
+                runner=runner,
+                host_environment={},
+            )
+
+            with self.assertRaises(DockerInfrastructureError):
+                executor.run(spec)
+
+            self.assertEqual(runner.calls, [])
+
+
+if __name__ == "__main__":
+    unittest.main()
