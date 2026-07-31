@@ -142,6 +142,11 @@ trajectory_path = manifest_path.with_name(
 assert "isolation-sentinel-clear" in trajectory_path.read_text()
 summary_path = manifest_path.parents[1] / "summary.txt"
 assert "pass_rate             =     100.00" in summary_path.read_text()
+report_path = manifest_path.parents[1] / "agent-summary.json"
+report = json.loads(report_path.read_text())
+assert report["correctness"]["passed"] == 1, report
+assert report["execution"]["status_counts"] == {"completed": 1}, report
+assert report["submission"]["status_counts"] == {"published": 1}, report
 
 print("isolation_status=passed")
 print(f"manifest={manifest_path}")

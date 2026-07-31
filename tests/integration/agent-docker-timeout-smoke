@@ -104,6 +104,11 @@ actual_digest = hashlib.sha256(sample_path.read_bytes()).hexdigest()
 assert actual_digest == manifest["submission"]["sha256"]
 summary_path = manifest_path.parents[1] / "summary.txt"
 assert "pass_rate             =     100.00" in summary_path.read_text()
+report_path = manifest_path.parents[1] / "agent-summary.json"
+report = json.loads(report_path.read_text())
+assert report["correctness"]["passed"] == 1, report
+assert report["execution"]["status_counts"] == {"timeout": 1}, report
+assert report["submission"]["status_counts"] == {"published": 1}, report
 
 print("timeout_status=passed")
 print(f"manifest={manifest_path}")
