@@ -89,6 +89,12 @@ manifests = list(run_root.glob("agent-nix-eval-*/*/*-generation.json"))
 assert len(manifests) == 1, manifests
 manifest_path = manifests[0]
 manifest = json.loads(manifest_path.read_text())
+runtime = manifest["runtime"]
+assert len(runtime["source_revision"]) == 40, runtime
+assert len(runtime["source_diff_sha256"]) == 64, runtime
+assert runtime["docker_image"] == "verilog-eval-agent-sandbox:v1", runtime
+assert runtime["docker_image_id"].startswith("sha256:"), runtime
+assert runtime["api_base_url"] == "http://127.0.0.1:58000/v1", runtime
 execution_status = manifest["execution"].get("status")
 submission_status = manifest["submission"].get("status")
 exit_code = manifest["execution"].get("exit_code")
@@ -109,6 +115,7 @@ report = json.loads(report_path.read_text())
 assert report["correctness"]["passed"] == 1, report
 assert report["execution"]["status_counts"] == {"timeout": 1}, report
 assert report["submission"]["status_counts"] == {"published": 1}, report
+assert report["samples"][0]["runtime"] == runtime, report
 
 print("timeout_status=passed")
 print(f"manifest={manifest_path}")
