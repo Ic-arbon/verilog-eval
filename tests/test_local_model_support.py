@@ -96,7 +96,7 @@ class LocalModelSupportTests(unittest.TestCase):
         self.assertIn("OpenAI-Compatible Models", stdout.getvalue())
         self.assertIn("qwen3.6-coder", stdout.getvalue())
 
-    def test_qwen_uses_chat_openai_with_its_real_model_name(self):
+    def generate(self, model="qwen3.6-coder", qwen_thinking="on"):
         generator = load_generator()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -106,23 +106,49 @@ class LocalModelSupportTests(unittest.TestCase):
             prompt.write_text("Implement TopModule with a constant-zero output.")
             argv = [
                 str(GENERATOR_PATH),
-                "--model=qwen3.6-coder",
+                f"--model={model}",
                 "--task=spec-to-rtl",
                 "--temperature=0.6",
                 "--top-p=0.95",
                 "--max-tokens=8192",
+                f"--qwen-thinking={qwen_thinking}",
                 f"--output={output}",
                 str(prompt),
             ]
 
-            with patch.object(sys, "argv", argv), redirect_stdout(io.StringIO()):
+            stdout = io.StringIO()
+            with patch.object(sys, "argv", argv), redirect_stdout(stdout):
                 generator.main()
 
-            self.assertEqual(len(FakeChatOpenAI.instances), 1)
-            client = FakeChatOpenAI.instances[0]
-            self.assertEqual(client.kwargs["model"], "qwen3.6-coder")
-            self.assertEqual(client.kwargs["max_tokens"], 8192)
-            self.assertIn("module TopModule", output.read_text())
+            return stdout.getvalue(), output.read_text() if output.exists() else ""
+
+    def test_qwen_uses_chat_openai_with_its_real_model_name(self):
+        _stdout, output = self.generate()
+
+        self.assertEqual(len(FakeChatOpenAI.instances), 1)
+        client = FakeChatOpenAI.instances[0]
+        self.assertEqual(client.kwargs["model"], "qwen3.6-coder")
+        self.assertEqual(client.kwargs["max_tokens"], 8192)
+        self.assertEqual(
+            client.kwargs["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": True}},
+        )
+        self.assertIn("module TopModule", output)
+
+    def test_qwen_thinking_can_be_disabled_at_request_level(self):
+        self.generate(qwen_thinking="off")
+
+        client = FakeChatOpenAI.instances[0]
+        self.assertEqual(
+            client.kwargs["extra_body"],
+            {"chat_template_kwargs": {"enable_thinking": False}},
+        )
+
+    def test_qwen_thinking_off_is_rejected_for_other_models(self):
+        stdout, _output = self.generate(model="gpt-4o", qwen_thinking="off")
+
+        self.assertEqual(FakeChatOpenAI.instances, [])
+        self.assertIn("--qwen-thinking=off requires a Qwen model", stdout)
 
 
 if __name__ == "__main__":

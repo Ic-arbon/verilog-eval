@@ -9,7 +9,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class MaxTokensConfigurationTests(unittest.TestCase):
-    def test_configure_propagates_max_tokens_to_generator_flags(self):
+    def test_configure_propagates_generation_options(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             build_dir = root / "build"
@@ -39,6 +39,7 @@ class MaxTokensConfigurationTests(unittest.TestCase):
                     "--with-temperature=0.6",
                     "--with-top-p=0.95",
                     "--with-max-tokens=8192",
+                    "--with-qwen-thinking=off",
                     f"--with-problems={problems}",
                 ],
                 cwd=build_dir,
@@ -50,14 +51,15 @@ class MaxTokensConfigurationTests(unittest.TestCase):
 
             configure_output = result.stdout + result.stderr
             self.assertNotIn("unrecognized options: --with-max-tokens", configure_output)
-            self.assertIn(
-                'GENERATE_FLAGS += "--max-tokens=8192"',
-                (build_dir / "Makefile").read_text(),
-            )
+            self.assertNotIn("unrecognized options: --with-qwen-thinking", configure_output)
+            makefile = (build_dir / "Makefile").read_text()
+            self.assertIn('GENERATE_FLAGS += "--max-tokens=8192"', makefile)
+            self.assertIn('GENERATE_FLAGS += "--qwen-thinking=off"', makefile)
 
-    def test_flake_defaults_to_8192_max_tokens(self):
+    def test_flake_defaults_to_qwen_generation_settings(self):
         flake = (REPO_ROOT / "flake.nix").read_text()
         self.assertIn("--with-max-tokens=8192", flake)
+        self.assertIn("--with-qwen-thinking=on", flake)
 
 
 if __name__ == "__main__":
