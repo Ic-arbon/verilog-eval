@@ -9,7 +9,12 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_generation.cli import AgentGeneratorConfig, main, run_agent_generation
-from agent_generation.contracts import AgentEnvironment, AgentUsage, ProcessResult
+from agent_generation.contracts import (
+    AgentEnvironment,
+    AgentUsage,
+    ProcessResult,
+    RuntimeProvenance,
+)
 
 
 class FakeDriver:
@@ -150,7 +155,19 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
         candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            config = self.make_config(root)
+            base_config = self.make_config(root)
+            config = AgentGeneratorConfig(
+                **{
+                    **base_config.__dict__,
+                    "runtime_provenance": RuntimeProvenance(
+                        source_revision="1" * 40,
+                        source_diff_sha256="2" * 64,
+                        docker_image="verilog-eval-agent-sandbox:v1",
+                        docker_image_id="sha256:" + "3" * 64,
+                        agent_tools_versions="pi=0.82.1 opencode=1.18.7",
+                    ),
+                }
+            )
             driver = FakeDriver()
             executor = FakeExecutor(
                 completed_result(stderr="diagnostic\n"),
@@ -187,6 +204,14 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(manifest["execution"]["status"], "completed")
             self.assertEqual(manifest["submission"]["status"], "published")
             self.assertEqual(manifest["usage"]["input_tokens"], 120)
+            self.assertEqual(manifest["runtime"]["source_revision"], "1" * 40)
+            self.assertEqual(
+                manifest["runtime"]["docker_image_id"], "sha256:" + "3" * 64
+            )
+            self.assertEqual(
+                manifest["runtime"]["agent_tools_versions"],
+                "pi=0.82.1 opencode=1.18.7",
+            )
             self.assertNotIn("workspace", json.dumps(manifest))
 
             trajectory = config.output_path.with_name(
