@@ -276,6 +276,8 @@
 
           configure_args=(
             --with-generator=agent
+            --with-model=qwen3.6-coder
+            --with-task=spec-to-rtl
             --with-agent=opencode
             --with-agent-timeout=300
             --with-agent-max-turns=20
