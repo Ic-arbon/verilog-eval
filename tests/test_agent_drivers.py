@@ -6,7 +6,10 @@ import unittest
 from pathlib import Path
 
 from agent_generation.contracts import AgentRunRequest
-from agent_generation.drivers.base import ARTIFACT_INSTRUCTION
+from agent_generation.drivers.base import (
+    ARTIFACT_INSTRUCTION,
+    INLINE_ARTIFACT_INSTRUCTION,
+)
 from agent_generation.drivers.opencode import OpenCodeDriver
 from agent_generation.drivers.pi import PiDriver
 
@@ -169,8 +172,12 @@ class OpenCodeDriverTests(unittest.TestCase):
                 "vllm-local/qwen3.6-coder",
             )
             self.assertEqual(command[command.index("--agent") + 1], "benchmark")
-            self.assertEqual(command[-1], ARTIFACT_INSTRUCTION)
-            self.assertEqual(driver.profile_id, "opencode-artifact-no-thinking-v2")
+            self.assertTrue(command[-1].startswith(INLINE_ARTIFACT_INSTRUCTION))
+            self.assertIn(request.prompt_text, command[-1])
+            self.assertNotIn("Read /workspace/TASK.md", command[-1])
+            self.assertEqual(
+                driver.profile_id, "opencode-inline-artifact-no-thinking-v1"
+            )
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(
@@ -192,6 +199,21 @@ class OpenCodeDriverTests(unittest.TestCase):
                     driver.parse_event('{"type":"agent_start"}'),
                     {"type": "agent_start"},
                 )
+
+    def test_pi_and_opencode_receive_identical_inline_public_task_prompt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = make_request(Path(tmp))
+            pi_command = PiDriver(
+                base_url="http://127.0.0.1:58000/v1"
+            ).build_command(request)
+            opencode_command = OpenCodeDriver(
+                base_url="http://127.0.0.1:58000/v1"
+            ).build_command(request)
+
+            self.assertEqual(pi_command[-1], opencode_command[-1])
+            self.assertEqual(
+                pi_command[-1], INLINE_ARTIFACT_INSTRUCTION + request.prompt_text
+            )
 
     def test_drivers_classify_only_completed_budget_events(self):
         pi = PiDriver(base_url="http://127.0.0.1:58000/v1")
