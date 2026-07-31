@@ -5,6 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SMOKE_SCRIPT = ROOT / "tests" / "integration" / "agent-docker-isolation-smoke"
+TIMEOUT_SMOKE_SCRIPT = (
+    ROOT / "tests" / "integration" / "agent-docker-timeout-smoke"
+)
 
 
 class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
@@ -32,6 +35,20 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("/opt/agent/verilog-eval", source)
         self.assertIn('execution_status == "completed"', source)
         self.assertIn('submission_status == "published"', source)
+
+    def test_timeout_smoke_keeps_execution_and_submission_orthogonal(self):
+        self.assertTrue(TIMEOUT_SMOKE_SCRIPT.is_file())
+        self.assertTrue(os.access(TIMEOUT_SMOKE_SCRIPT, os.X_OK))
+
+        source = TIMEOUT_SMOKE_SCRIPT.read_text()
+        self.assertIn("node_modules/.bin/opencode", source)
+        self.assertIn("sleep 120", source)
+        self.assertIn("--with-agent-timeout=2", source)
+        self.assertIn('execution_status == "timeout"', source)
+        self.assertIn('submission_status == "published"', source)
+        self.assertIn('exit_code is None', source)
+        self.assertIn("no new Agent containers remain", source)
+        self.assertIn('chmod -R u+w "$scratch"', source)
 
 
 if __name__ == "__main__":
