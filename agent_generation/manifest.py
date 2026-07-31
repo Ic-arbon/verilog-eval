@@ -11,6 +11,7 @@ from pathlib import Path
 from agent_generation.contracts import (
     AgentGenerationResult,
     AgentRunRequest,
+    RuntimeProvenance,
 )
 
 
@@ -44,6 +45,7 @@ def write_generation_sidecars(
     output_path: Path,
     request: AgentRunRequest,
     profile_id: str,
+    runtime_provenance: RuntimeProvenance,
     result: AgentGenerationResult,
 ) -> None:
     """Persist normalized metadata without retaining the ephemeral workspace."""
@@ -70,6 +72,7 @@ def write_generation_sidecars(
             "size_bytes": submission.size_bytes,
         },
         "usage": asdict(process.usage),
+        "runtime": asdict(runtime_provenance),
     }
 
     atomic_write_text(

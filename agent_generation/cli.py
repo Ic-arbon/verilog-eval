@@ -13,6 +13,7 @@ from agent_generation.contracts import (
     AgentGenerationResult,
     AgentProcessSpec,
     AgentRunRequest,
+    RuntimeProvenance,
 )
 from agent_generation.docker import DockerExecutor, DockerInfrastructureError
 from agent_generation.drivers.base import AgentDriver, AgentExecutor
@@ -41,6 +42,7 @@ class AgentGeneratorConfig:
     max_tool_calls: int
     per_call_max_tokens: int
     rules_text: Optional[str]
+    runtime_provenance: RuntimeProvenance = RuntimeProvenance()
 
     def __post_init__(self) -> None:
         if self.output_path.stem != self.sample_id:
@@ -144,6 +146,7 @@ def run_agent_generation(
             output_path=config.output_path,
             request=request,
             profile_id=driver.profile_id,
+            runtime_provenance=config.runtime_provenance,
             result=result,
         )
 
@@ -285,6 +288,25 @@ def main(
             max_tool_calls=args.agent_max_tool_calls,
             per_call_max_tokens=args.max_tokens,
             rules_text=selected_rules(args.task, args.rules),
+            runtime_provenance=RuntimeProvenance(
+                source_revision=runtime_environment.get(
+                    "VERILOG_EVAL_SOURCE_REVISION"
+                ),
+                source_diff_sha256=runtime_environment.get(
+                    "VERILOG_EVAL_SOURCE_DIFF_SHA256"
+                ),
+                docker_image=getattr(selected_executor, "image", None),
+                docker_image_id=runtime_environment.get(
+                    "AGENT_EVAL_DOCKER_IMAGE_ID"
+                ),
+                agent_tools_versions=runtime_environment.get(
+                    "AGENT_EVAL_AGENT_TOOLS_VERSIONS"
+                ),
+                agent_tools_lock_sha256=runtime_environment.get(
+                    "AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256"
+                ),
+                api_base_url=base_url,
+            ),
         )
         run_agent_generation(config, selected_driver, selected_executor)
     except DockerInfrastructureError as error:

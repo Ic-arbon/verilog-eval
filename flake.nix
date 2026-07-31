@@ -162,6 +162,14 @@
             root="$(git rev-parse --show-toplevel)"
           fi
           export VERILOG_EVAL_ROOT="$root"
+          source_revision="$(git -C "$root" rev-parse HEAD)"
+          source_diff_sha256="$(
+            git -C "$root" diff --no-ext-diff --binary HEAD \
+              | sha256sum \
+              | cut -d' ' -f1
+          )"
+          export VERILOG_EVAL_SOURCE_REVISION="$source_revision"
+          export VERILOG_EVAL_SOURCE_DIFF_SHA256="$source_diff_sha256"
 
           verilog-eval-setup
           export PATH="$root/.venv/bin:$PATH"
@@ -172,7 +180,7 @@
             exit 2
           fi
 
-          # Default to the benchmark's low-temperature Pass@1 configuration.
+          # Default to the benchmark Pass@1 configuration.
           # Later user arguments override these defaults.
           configure_args=(
             --with-samples=1
@@ -182,7 +190,11 @@
             "$@"
           )
           config_key="$(
-            printf '%s\0' "''${configure_args[@]}" \
+            printf '%s\0' \
+              "$source_revision" \
+              "$source_diff_sha256" \
+              "''${OPENAI_API_BASE:-unset}" \
+              "''${configure_args[@]}" \
               | sha256sum \
               | cut -c1-12
           )"
@@ -221,6 +233,14 @@
           fi
           export VERILOG_EVAL_ROOT="$root"
           export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
+          source_revision="$(git -C "$root" rev-parse HEAD)"
+          source_diff_sha256="$(
+            git -C "$root" diff --no-ext-diff --binary HEAD \
+              | sha256sum \
+              | cut -d' ' -f1
+          )"
+          export VERILOG_EVAL_SOURCE_REVISION="$source_revision"
+          export VERILOG_EVAL_SOURCE_DIFF_SHA256="$source_diff_sha256"
 
           if [[ -z "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
             verilog-agent-tools-setup
@@ -229,6 +249,16 @@
           export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
           export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
           export AGENT_EVAL_DOCKER_IMAGE_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
+          if [[ -r "$AGENT_EVAL_AGENT_TOOLS/.versions" ]]; then
+            export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$(
+              tr -d '\r\n' <"$AGENT_EVAL_AGENT_TOOLS/.versions"
+            )"
+          fi
+          if [[ -r "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" ]]; then
+            export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$(
+              sha256sum "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" | cut -d' ' -f1
+            )"
+          fi
 
           export OPENAI_API_BASE="''${OPENAI_API_BASE:-http://127.0.0.1:58000/v1}"
           if [[ -z "''${OPENAI_API_KEY:-}" ]]; then
@@ -263,9 +293,11 @@
           case "$tool_profile" in
             base)
               image_archive=${agentSandboxImage}
+              image_reference="$AGENT_EVAL_DOCKER_IMAGE_BASE"
               ;;
             rtl)
               image_archive=${minimalRtlSandboxImage}
+              image_reference="$AGENT_EVAL_DOCKER_IMAGE_RTL"
               ;;
             *)
               echo "Agent tool profile must be base or rtl" >&2
@@ -273,6 +305,12 @@
               ;;
           esac
           docker load --input "$image_archive" >/dev/null
+          image_id="$(docker image inspect --format '{{.Id}}' "$image_reference")"
+          if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "Docker image ID is invalid: $image_id" >&2
+            exit 1
+          fi
+          export AGENT_EVAL_DOCKER_IMAGE_ID="$image_id"
 
           configure_args=(
             --with-generator=agent
@@ -292,7 +330,13 @@
             "$@"
           )
           config_key="$(
-            printf '%s\0' "''${configure_args[@]}" \
+            printf '%s\0' \
+              "$source_revision" \
+              "$source_diff_sha256" \
+              "$OPENAI_API_BASE" \
+              "$image_id" \
+              "''${AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256:-unavailable}" \
+              "''${configure_args[@]}" \
               | sha256sum \
               | cut -c1-12
           )"
