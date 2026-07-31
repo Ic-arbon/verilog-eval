@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 
 SUPPORTED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
+PROCESS_STATUSES = frozenset({"completed", "timeout", "error"})
+SAMPLE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 
 
 def _require_nonempty(name: str, value: str) -> None:
@@ -43,6 +46,8 @@ class AgentRunRequest:
 
     def __post_init__(self) -> None:
         _require_nonempty("sample_id", self.sample_id)
+        if SAMPLE_ID_PATTERN.fullmatch(self.sample_id) is None:
+            raise ValueError("sample_id contains unsupported path characters")
         _require_nonempty("agent_name", self.agent_name)
         _require_nonempty("model", self.model)
         _require_nonempty("prompt_text", self.prompt_text)
@@ -80,6 +85,24 @@ class AgentUsage:
             tool_calls=None,
             usage_source="unavailable",
         )
+
+
+@dataclass(frozen=True)
+class ProcessResult:
+    """Normalized outcome from one bounded external Agent process."""
+
+    status: str
+    exit_code: Optional[int]
+    duration_seconds: float
+    stdout: str
+    stderr: str
+    usage: AgentUsage
+
+    def __post_init__(self) -> None:
+        if self.status not in PROCESS_STATUSES:
+            raise ValueError(f"unsupported process status: {self.status}")
+        if self.duration_seconds < 0:
+            raise ValueError("duration_seconds must not be negative")
 
 
 @dataclass(frozen=True)

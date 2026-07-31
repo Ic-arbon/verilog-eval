@@ -7,7 +7,7 @@ import os
 import stat
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 from agent_generation.contracts import SubmissionResult
 
@@ -44,7 +44,7 @@ def _atomic_write(output_path: Path, content: bytes) -> None:
 def _read_regular_candidate(
     candidate_path: Path,
     max_candidate_bytes: int,
-) -> Optional[Tuple[bytes, os.stat_result]]:
+) -> Optional[bytes]:
     if candidate_path.is_symlink():
         return None
 
@@ -67,7 +67,7 @@ def _read_regular_candidate(
             content = candidate_file.read(max_candidate_bytes + 1)
         if not content or len(content) > max_candidate_bytes:
             return None
-        return content, file_status
+        return content
     finally:
         os.close(file_descriptor)
 
@@ -108,7 +108,7 @@ def publish_submission(
     if candidate is None:
         return _publish_failure(output_path, "invalid", "invalid_submission")
 
-    content, _file_status = candidate
+    content = candidate
     candidate_sha256 = hashlib.sha256(content).hexdigest()
     if starter_sha256 is not None and candidate_sha256 == starter_sha256:
         return _publish_failure(output_path, "missing", "unchanged_starter")
