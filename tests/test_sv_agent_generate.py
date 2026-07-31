@@ -8,7 +8,7 @@ from contextlib import redirect_stdout
 from pathlib import Path
 
 from agent_generation.cli import AgentGeneratorConfig, run_agent_generation
-from agent_generation.contracts import AgentUsage, ProcessResult
+from agent_generation.contracts import AgentEnvironment, AgentUsage, ProcessResult
 
 
 class FakeDriver:
@@ -27,6 +27,12 @@ class FakeDriver:
 
     def build_command(self, request):
         return ("fake-agent", "--workspace", "/workspace")
+
+    def environment(self, request):
+        return AgentEnvironment(
+            variables=(("HOME", "/workspace/.home"),),
+            inherit=("VLLM_API_KEY",),
+        )
 
     def parse_event(self, line):
         return None
@@ -104,6 +110,14 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(len(driver.requests), 1)
             self.assertEqual(executor.specs[0].command[0], "fake-agent")
             self.assertEqual(executor.specs[0].timeout_seconds, 30)
+            self.assertEqual(
+                executor.specs[0].environment.variables,
+                (("HOME", "/workspace/.home"),),
+            )
+            self.assertEqual(
+                executor.specs[0].environment.inherit,
+                ("VLLM_API_KEY",),
+            )
             self.assertFalse(executor.workspace_paths[0].exists())
 
             manifest_path = config.output_path.with_name(
