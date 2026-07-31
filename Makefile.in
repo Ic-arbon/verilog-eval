@@ -228,8 +228,14 @@ sv-iv-test-clean  : $(sv_iv_test_clean_targets)
 sv-iv-analyze : $(sv_iv_test_targets)
 	@$(ECHO) Analyzing verilog/iverilog results 
 	$(QUIET) $(scripts_dir)/sv-iv-analyze --csv=summary.csv $(problems) | tee summary.txt
+ifeq ($(generator),agent)
+	$(QUIET) $(scripts_dir)/sv-agent-analyze \
+              --summary-csv=summary.csv \
+              --output-json=agent-summary.json \
+              --output-text=agent-summary.txt
+endif
 
-junk += summary.txt summary.csv
+junk += summary.txt summary.csv agent-summary.json agent-summary.txt
 
 #-------------------------------------------------------------------------
 # pregen
@@ -246,6 +252,10 @@ extra_pregen_files = \
   samples.mk \
   summary.txt \
   summary.csv \
+
+ifeq ($(generator),agent)
+extra_pregen_files += agent-summary.json agent-summary.txt
+endif
 
 ifneq ($(pregen_dir),NOT_ENABLED)
 pregen: $(sv_samples)
