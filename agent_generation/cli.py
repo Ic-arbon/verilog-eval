@@ -109,11 +109,13 @@ def run_agent_generation(
         )
         driver.write_config(request)
         command = tuple(driver.build_command(request))
+        environment = driver.environment(request)
         process = executor.run(
             AgentProcessSpec(
                 command=command,
                 workspace=prepared.root,
                 timeout_seconds=request.timeout_seconds,
+                environment=environment,
             )
         )
         submission = publish_submission(

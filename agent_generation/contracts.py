@@ -11,6 +11,7 @@ from typing import Optional
 SUPPORTED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
 PROCESS_STATUSES = frozenset({"completed", "timeout", "error"})
 SAMPLE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
+ENVIRONMENT_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
 def _require_nonempty(name: str, value: str) -> None:
@@ -106,12 +107,31 @@ class ProcessResult:
 
 
 @dataclass(frozen=True)
+class AgentEnvironment:
+    """Non-secret values and explicitly inherited secret environment names."""
+
+    variables: tuple[tuple[str, str], ...] = ()
+    inherit: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        variable_names = [name for name, _value in self.variables]
+        all_names = variable_names + list(self.inherit)
+        if any(ENVIRONMENT_NAME_PATTERN.fullmatch(name) is None for name in all_names):
+            raise ValueError("environment contains an invalid variable name")
+        if len(set(all_names)) != len(all_names):
+            raise ValueError("environment variable names must be unique")
+        if any("\x00" in value for _name, value in self.variables):
+            raise ValueError("environment values must not contain NUL bytes")
+
+
+@dataclass(frozen=True)
 class AgentProcessSpec:
     """Command and public workspace passed to an isolated executor."""
 
     command: tuple[str, ...]
     workspace: Path
     timeout_seconds: int
+    environment: AgentEnvironment = AgentEnvironment()
 
     def __post_init__(self) -> None:
         if not self.command or any(not argument for argument in self.command):

@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional, Protocol
 
 from agent_generation.contracts import (
+    AgentEnvironment,
     AgentProcessSpec,
     AgentRunRequest,
     ProcessResult,
@@ -31,6 +32,9 @@ class AgentDriver(Protocol):
         ...
 
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
+        ...
+
+    def environment(self, request: AgentRunRequest) -> AgentEnvironment:
         ...
 
     def parse_event(self, line: str) -> Optional[object]:
