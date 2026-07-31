@@ -590,6 +590,7 @@ LIBOBJS
 pregen_dir
 problems_file
 dataset_dir
+qwen_thinking
 max_tokens
 top_p
 temperature
@@ -648,6 +649,7 @@ with_samples
 with_temperature
 with_top_p
 with_max_tokens
+with_qwen_thinking
 with_dataset
 with_problems
 with_pregen_dir
@@ -1273,6 +1275,7 @@ Optional Packages:
   --with-temperature      Temperature of model
   --with-top-p            Top-p of model
   --with-max-tokens       Maximum number of model response tokens
+  --with-qwen-thinking    Enable or disable Qwen thinking (on/off)
   --with-dataset          Directory with dataset files
   --with-problems         File with list of problems
   --with-pregen-dir       Directory for storing pregen files
@@ -1896,6 +1899,29 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: using max tokens: ${max_tokens}" >&5
 $as_echo "$as_me: using max tokens: ${max_tokens}" >&6;}
+
+#-------------------------------------------------------------------------
+# --with-qwen-thinking
+#-------------------------------------------------------------------------
+
+
+# Check whether --with-qwen-thinking was given.
+if test "${with_qwen_thinking+set}" = set; then :
+  withval=$with_qwen_thinking; qwen_thinking="${with_qwen_thinking}"
+else
+  qwen_thinking=on
+fi
+
+
+if test "${qwen_thinking}" != "on" && test "${qwen_thinking}" != "off"; then :
+
+  as_fn_error $? "--with-qwen-thinking must be on or off" "$LINENO" 5
+
+fi
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Qwen thinking: ${qwen_thinking}" >&5
+$as_echo "$as_me: using Qwen thinking: ${qwen_thinking}" >&6;}
 
 #-------------------------------------------------------------------------
 # dataset

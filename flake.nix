@@ -82,6 +82,7 @@
             --with-temperature=0.6
             --with-top-p=0.95
             --with-max-tokens=8192
+            --with-qwen-thinking=on
             "$@"
           )
           config_key="$(

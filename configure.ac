@@ -140,6 +140,23 @@ AC_SUBST([max_tokens])
 AC_MSG_NOTICE([using max tokens: ${max_tokens}])
 
 #-------------------------------------------------------------------------
+# --with-qwen-thinking
+#-------------------------------------------------------------------------
+
+AC_ARG_WITH(qwen-thinking,
+  AS_HELP_STRING([--with-qwen-thinking],[Enable or disable Qwen thinking (on/off)]),
+  [qwen_thinking="${with_qwen_thinking}"],
+  [qwen_thinking=on])
+
+AS_IF([test "${qwen_thinking}" != "on" && test "${qwen_thinking}" != "off"],
+[
+  AC_MSG_ERROR([--with-qwen-thinking must be on or off])
+])
+
+AC_SUBST([qwen_thinking])
+AC_MSG_NOTICE([using Qwen thinking: ${qwen_thinking}])
+
+#-------------------------------------------------------------------------
 # dataset
 #-------------------------------------------------------------------------
 

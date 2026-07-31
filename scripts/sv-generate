@@ -10,6 +10,7 @@
 #  -t --temperature    LLM model temperature (default: 0.85)
 #  -p --top-p          LLM model top_p (default: 0.95)
 #  -n --max-tokens     LLM model max_tokens (default: 1024)
+#     --qwen-thinking  Enable or disable Qwen thinking (default: on)
 #  -e --explain        Let the model include an explanation
 #  -x --examples       Include the in-context examples for a number of shots (default: 0)
 #  -r --rules          Include the in-context rules
@@ -59,6 +60,7 @@ def parse_cmdline():
   p.add_argument( "-t", "--temperature", type=float, default=0.8 )
   p.add_argument( "-n", "--max-tokens",  type=int,   default=1024 )
   p.add_argument( "-p", "--top-p",       type=float, default=0.95 )
+  p.add_argument(       "--qwen-thinking", choices=["on", "off"], default="on" )
   p.add_argument( "-e", "--explain",     action="store_true" )
   p.add_argument( "-x", "--examples",    type=int,   default=0 )
   p.add_argument( "-r", "--rules",       action="store_true" )
@@ -82,6 +84,10 @@ openai_models = [
 ]
 
 openai_compatible_models = [
+  "qwen3.6-coder",
+]
+
+qwen_thinking_models = [
   "qwen3.6-coder",
 ]
 
@@ -261,6 +267,12 @@ def main():
     print("")
     return
 
+  if opts.qwen_thinking == "off" and model not in qwen_thinking_models:
+    print("")
+    print("ERROR: --qwen-thinking=off requires a Qwen model")
+    print("")
+    return
+
 
   system_msg = prompts[task]['system_msg']
   prompt_prefix = prompts[task]['prompt_prefix']
@@ -285,6 +297,7 @@ def main():
   out.print( f"temperature = {temperature}" )
   out.print( f"top_p       = {top_p}"       )
   out.print( f"max_tokens  = {max_tokens}"  )
+  out.print( f"qwen_thinking = {opts.qwen_thinking if model in qwen_thinking_models else 'n/a'}" )
 
   # Read the prompt file
   with open(opts.prompt_filename) as file:
@@ -360,11 +373,20 @@ def main():
   # Query the LLM
 
   if model in openai_models + openai_compatible_models:
+    qwen_options = {}
+    if model in qwen_thinking_models:
+      qwen_options["extra_body"] = {
+        "chat_template_kwargs": {
+          "enable_thinking": opts.qwen_thinking == "on",
+        },
+      }
+
     llm = ChatOpenAI(
       model       = model,
       temperature = temperature,
       top_p       = top_p,
       max_tokens  = max_tokens,
+      **qwen_options,
     )
   elif model in nim_chat_models:
     llm = ChatNVIDIA(

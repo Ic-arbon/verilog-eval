@@ -71,7 +71,18 @@ nix run .#eval -- \
 ```
 
 The model ID returned by the server's `/v1/models` endpoint must be
-`qwen3.6-coder`.
+`qwen3.6-coder`. Qwen thinking remains enabled by default. Disable it at the
+request level for a separate evaluation profile with:
+
+```sh
+nix run .#eval -- \
+  --with-model=qwen3.6-coder \
+  --with-qwen-thinking=off
+```
+
+This sends
+`chat_template_kwargs.enable_thinking=false` to the existing server; it does
+not modify the vLLM deployment.
 
 ### Usage 
 
