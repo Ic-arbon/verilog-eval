@@ -8,10 +8,6 @@
       system = "x86_64-linux";
       pkgs = nixpkgs.legacyPackages.${system};
       runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
-      agentRuntimeLibraryPath = pkgs.lib.makeLibraryPath [
-        pkgs.stdenv.cc.cc.lib
-        pkgs.glibc
-      ];
 
       agentSandboxPackages = with pkgs; [
         nodejs_22
@@ -39,8 +35,6 @@
       ]);
       agentSandboxPath = pkgs.lib.makeBinPath agentSandboxPackages;
       minimalRtlSandboxPath = pkgs.lib.makeBinPath minimalRtlSandboxPackages;
-      agentStoreRoots = pkgs.lib.concatStringsSep " " (map toString agentSandboxPackages);
-      minimalRtlStoreRoots = pkgs.lib.concatStringsSep " " (map toString minimalRtlSandboxPackages);
       agentSandboxImageName = "verilog-eval-agent-sandbox";
       mkAgentSandboxImage = tag: packages: sandboxPath:
         pkgs.dockerTools.buildLayeredImage {
@@ -209,9 +203,7 @@
         runtimeInputs = with pkgs; [
           setupAgentTools
           python311
-          bubblewrap
           docker_29
-          nix
           iverilog
           gnumake
           gitMinimal
@@ -220,6 +212,7 @@
           gnugrep
           gnused
           bash
+          curl
         ];
         text = ''
           root="''${VERILOG_EVAL_ROOT:-}"
@@ -227,44 +220,89 @@
             root="$(git rev-parse --show-toplevel)"
           fi
           export VERILOG_EVAL_ROOT="$root"
-          export VERILOG_EVAL_CACHE_ROOT="''${VERILOG_EVAL_CACHE_ROOT:-$root/.cache}"
-          mkdir -p "$VERILOG_EVAL_CACHE_ROOT"
-          export XDG_CACHE_HOME="$VERILOG_EVAL_CACHE_ROOT"
-          export npm_config_cache="$VERILOG_EVAL_CACHE_ROOT/npm"
+          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
 
-          use_default_agent_tools=1
-          if [[ -n "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
-            use_default_agent_tools=0
-          else
-            for argument in "$@"; do
-              case "$argument" in
-                --agent-tools|--agent-tools=*) use_default_agent_tools=0 ;;
-              esac
-            done
-          fi
-
-          if [[ "$use_default_agent_tools" == 1 ]]; then
+          if [[ -z "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
             verilog-agent-tools-setup
             export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
           fi
-          export AGENT_EVAL_BWRAP=${pkgs.bubblewrap}/bin/bwrap
           export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
           export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
-          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE_BASE=${agentSandboxImage}
-          export AGENT_EVAL_SANDBOX_PATH_BASE="/agent-tools/node_modules/.bin:${agentSandboxPath}"
-          export AGENT_EVAL_STORE_ROOTS_BASE="${agentStoreRoots}"
-          export AGENT_EVAL_DOCKER_IMAGE_MINIMAL_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
-          export AGENT_EVAL_DOCKER_IMAGE_ARCHIVE_MINIMAL_RTL=${minimalRtlSandboxImage}
-          export AGENT_EVAL_SANDBOX_PATH_MINIMAL_RTL="/agent-tools/node_modules/.bin:${minimalRtlSandboxPath}"
-          export AGENT_EVAL_STORE_ROOTS_MINIMAL_RTL="${minimalRtlStoreRoots}"
-          export AGENT_EVAL_TRUE=${pkgs.coreutils}/bin/true
-          export AGENT_EVAL_BASH=${pkgs.bash}/bin/bash
-          export AGENT_EVAL_ENV=${pkgs.coreutils}/bin/env
-          export AGENT_EVAL_SANDBOX_LD_LIBRARY_PATH="${agentRuntimeLibraryPath}"
-          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
-          export PYTHONPATH=${./.}
+          export AGENT_EVAL_DOCKER_IMAGE_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
 
-          exec python3 ${./agent_eval/runner.py} --repo-root "$root" "$@"
+          export OPENAI_API_BASE="''${OPENAI_API_BASE:-http://127.0.0.1:58000/v1}"
+          if [[ -z "''${OPENAI_API_KEY:-}" ]]; then
+            key_file="''${VERILOG_EVAL_VLLM_KEY_FILE:-/opt/llm/api-key.env}"
+            if [[ -r "$key_file" ]]; then
+              key_line="$(grep -m1 '^VLLM_API_KEY=' "$key_file" || true)"
+              export OPENAI_API_KEY="''${key_line#VLLM_API_KEY=}"
+            fi
+            export OPENAI_API_KEY="''${OPENAI_API_KEY:-local}"
+          fi
+
+          health_url="''${OPENAI_API_BASE%/v1}/health"
+          if ! curl --fail --silent --show-error "$health_url" >/dev/null; then
+            echo "vLLM is not healthy at $health_url" >&2
+            exit 1
+          fi
+
+          jobs="''${VERILOG_EVAL_JOBS:-$(nproc)}"
+          if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
+            echo "VERILOG_EVAL_JOBS must be a positive integer" >&2
+            exit 2
+          fi
+
+          tool_profile=base
+          for argument in "$@"; do
+            case "$argument" in
+              --with-agent-tool-profile=*)
+                tool_profile="''${argument#*=}"
+                ;;
+            esac
+          done
+          case "$tool_profile" in
+            base)
+              image_archive=${agentSandboxImage}
+              ;;
+            rtl)
+              image_archive=${minimalRtlSandboxImage}
+              ;;
+            *)
+              echo "Agent tool profile must be base or rtl" >&2
+              exit 2
+              ;;
+          esac
+          docker load --input "$image_archive" >/dev/null
+
+          configure_args=(
+            --with-generator=agent
+            --with-agent=opencode
+            --with-agent-timeout=300
+            --with-agent-max-turns=20
+            --with-agent-max-tool-calls=50
+            --with-agent-thinking=on
+            --with-agent-tool-profile=base
+            --with-samples=1
+            --with-examples=0
+            --with-max-tokens=8192
+            --with-temperature=0.6
+            --with-top-p=0.95
+            "$@"
+          )
+          config_key="$(
+            printf '%s\0' "''${configure_args[@]}" \
+              | sha256sum \
+              | cut -c1-12
+          )"
+          build_root="''${VERILOG_EVAL_BUILD_ROOT:-$root/build}"
+          build_dir="$build_root/agent-nix-eval-$config_key"
+          mkdir -p "$build_dir"
+
+          echo "Configuring Agent evaluation in $build_dir"
+          echo "Running make with $jobs parallel jobs"
+          cd "$build_dir"
+          "$root/configure" "''${configure_args[@]}"
+          exec make --jobs="$jobs" SHELL=${pkgs.bash}/bin/bash
         '';
       };
 
