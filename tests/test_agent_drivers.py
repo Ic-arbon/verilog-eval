@@ -69,8 +69,13 @@ class PiDriverTests(unittest.TestCase):
             self.assertIn("--no-skills", command)
             self.assertIn("--no-prompt-templates", command)
             self.assertIn("read,write,edit,bash", command)
+            self.assertIn("--append-system-prompt", command)
+            system_prompt = command[command.index("--append-system-prompt") + 1]
+            self.assertIn("MUST invoke the write or edit tool", system_prompt)
+            self.assertIn("chat text is never a submission", system_prompt)
             self.assertEqual(command[-1], ARTIFACT_INSTRUCTION)
             self.assertEqual(command[command.index("--thinking") + 1], "high")
+            self.assertEqual(driver.profile_id, "pi-artifact-thinking-v2")
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(
