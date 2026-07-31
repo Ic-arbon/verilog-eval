@@ -46,7 +46,7 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("--with-agent-timeout=2", source)
         self.assertIn('execution_status == "timeout"', source)
         self.assertIn('submission_status == "published"', source)
-        self.assertIn('exit_code is None', source)
+        self.assertIn("exit_code == 124", source)
         self.assertIn("no new Agent containers remain", source)
         self.assertIn('chmod -R u+w "$scratch"', source)
 

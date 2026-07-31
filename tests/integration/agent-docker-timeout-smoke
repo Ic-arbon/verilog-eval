@@ -94,7 +94,7 @@ submission_status = manifest["submission"].get("status")
 exit_code = manifest["execution"].get("exit_code")
 assert execution_status == "timeout", manifest
 assert submission_status == "published", manifest
-assert exit_code is None, manifest
+assert exit_code == 124, manifest
 assert 1 <= manifest["execution"]["duration_seconds"] < 15, manifest
 
 sample_path = manifest_path.with_name(
