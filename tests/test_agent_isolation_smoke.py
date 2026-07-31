@@ -8,6 +8,7 @@ SMOKE_SCRIPT = ROOT / "tests" / "integration" / "agent-docker-isolation-smoke"
 TIMEOUT_SMOKE_SCRIPT = (
     ROOT / "tests" / "integration" / "agent-docker-timeout-smoke"
 )
+BUDGET_SMOKE_SCRIPT = ROOT / "tests" / "integration" / "agent-docker-budget-smoke"
 
 
 class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
@@ -39,6 +40,20 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn('{"completed": 1}', source)
         self.assertIn('runtime = manifest["runtime"]', source)
         self.assertIn('runtime["docker_image_id"].startswith("sha256:")', source)
+
+    def test_budget_smoke_enforces_pi_turns_on_the_host(self):
+        self.assertTrue(BUDGET_SMOKE_SCRIPT.is_file())
+        self.assertTrue(os.access(BUDGET_SMOKE_SCRIPT, os.X_OK))
+
+        source = BUDGET_SMOKE_SCRIPT.read_text()
+        self.assertIn("node_modules/.bin/pi", source)
+        self.assertIn('"type":"turn_end"', source)
+        self.assertIn("--with-agent-max-turns=2", source)
+        self.assertIn('manifest["execution"]["status"] == "error"', source)
+        self.assertIn('manifest["execution"]["exit_code"] == 125', source)
+        self.assertIn('manifest["execution"]["termination_reason"] == "max_turns"', source)
+        self.assertIn('manifest["submission"]["status"] == "published"', source)
+        self.assertIn("no new Agent containers remain", source)
 
     def test_timeout_smoke_keeps_execution_and_submission_orthogonal(self):
         self.assertTrue(TIMEOUT_SMOKE_SCRIPT.is_file())

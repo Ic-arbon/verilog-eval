@@ -43,6 +43,9 @@ class FakeDriver:
     def parse_event(self, line):
         return None
 
+    def classify_budget_event(self, line):
+        return "turn" if line == "turn" else None
+
 
 class FakeExecutor:
     def __init__(self, result, candidate=None):
@@ -188,6 +191,9 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(len(driver.requests), 1)
             self.assertEqual(executor.specs[0].command[0], "fake-agent")
             self.assertEqual(executor.specs[0].timeout_seconds, 30)
+            self.assertEqual(executor.specs[0].max_turns, 10)
+            self.assertEqual(executor.specs[0].max_tool_calls, 20)
+            self.assertEqual(executor.specs[0].event_classifier("turn"), "turn")
             self.assertEqual(
                 executor.specs[0].environment.variables,
                 (("HOME", "/workspace/.home"),),
@@ -206,6 +212,7 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(manifest["producer"]["kind"], "agent")
             self.assertEqual(manifest["producer"]["profile"], "fake-artifact-v1")
             self.assertEqual(manifest["execution"]["status"], "completed")
+            self.assertIsNone(manifest["execution"]["termination_reason"])
             self.assertEqual(manifest["submission"]["status"], "published")
             self.assertEqual(
                 manifest["limits"],

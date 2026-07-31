@@ -45,6 +45,9 @@ def write_manifest(
                     "status": execution_status,
                     "exit_code": 0 if execution_status == "completed" else 124,
                     "duration_seconds": float(sample_number),
+                    "termination_reason": (
+                        "timeout" if execution_status == "timeout" else None
+                    ),
                 },
                 "limits": {
                     "timeout_seconds": 300,
@@ -142,6 +145,9 @@ class AgentReportingTests(unittest.TestCase):
             self.assertEqual(report["submission"]["conditional_passed"], 1)
             self.assertEqual(report["submission"]["conditional_pass_rate"], 0.5)
             self.assertEqual(report["samples"][1]["execution"]["status"], "timeout")
+            self.assertEqual(
+                report["samples"][1]["execution"]["termination_reason"], "timeout"
+            )
             self.assertFalse(report["samples"][1]["correctness"]["passed"])
             self.assertEqual(report["samples"][1]["submission"]["status"], "published")
             self.assertEqual(report["samples"][0]["limits"]["max_input_tokens"], 16384)

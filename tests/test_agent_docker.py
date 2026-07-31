@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -159,6 +160,50 @@ class DockerExecutorTests(unittest.TestCase):
             self.assertEqual(result.stderr, "deadline\n")
             self.assertTrue(runner.removed_before_return)
             self.assertEqual(runner.calls[1][0][1:4], ("rm", "--force", "abcdef1234567890"))
+
+    def test_host_terminates_process_when_streamed_turn_budget_is_reached(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            tools = root / "tools"
+            workspace.mkdir()
+            tools.mkdir()
+            fake_docker = root / "docker"
+            fake_docker.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = rm ]; then exit 0; fi\n"
+                "printf '{\"type\":\"turn_end\"}\\n'\n"
+                "printf '{\"type\":\"turn_end\"}\\n'\n"
+                "sleep 30\n"
+            )
+            fake_docker.chmod(0o755)
+            executor = DockerExecutor(
+                docker_path=str(fake_docker),
+                image="image:tag",
+                agent_tools=tools,
+                uid=1000,
+                gid=1000,
+                host_environment={},
+            )
+            spec = AgentProcessSpec(
+                command=("fake-agent",),
+                workspace=workspace,
+                timeout_seconds=20,
+                max_turns=2,
+                max_tool_calls=5,
+                event_classifier=lambda line: (
+                    "turn" if '"type":"turn_end"' in line else None
+                ),
+            )
+
+            started = time.monotonic()
+            result = executor.run(spec)
+
+            self.assertLess(time.monotonic() - started, 5)
+            self.assertEqual(result.status, "error")
+            self.assertEqual(result.exit_code, 125)
+            self.assertEqual(result.termination_reason, "max_turns")
+            self.assertEqual(result.stdout.count("turn_end"), 2)
 
     def test_missing_inherited_secret_fails_before_docker_starts(self):
         with tempfile.TemporaryDirectory() as tmp:

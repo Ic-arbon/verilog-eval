@@ -112,12 +112,14 @@ class ProcessResultTests(unittest.TestCase):
         )
 
         self.assertEqual(result.status, "timeout")
+        self.assertIsNone(result.termination_reason)
         self.assertIsNone(result.usage.input_tokens)
 
     def test_process_result_rejects_unknown_status_and_negative_duration(self):
         invalid_values = (
             {"status": "missing", "duration_seconds": 1.0},
             {"status": "completed", "duration_seconds": -0.1},
+            {"status": "error", "termination_reason": "unknown"},
         )
 
         for overrides in invalid_values:

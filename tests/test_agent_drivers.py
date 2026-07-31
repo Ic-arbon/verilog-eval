@@ -190,6 +190,32 @@ class OpenCodeDriverTests(unittest.TestCase):
                     {"type": "agent_start"},
                 )
 
+    def test_drivers_classify_only_completed_budget_events(self):
+        pi = PiDriver(base_url="http://127.0.0.1:58000/v1")
+        opencode = OpenCodeDriver(base_url="http://127.0.0.1:58000/v1")
+
+        self.assertEqual(pi.classify_budget_event('{"type":"turn_end"}'), "turn")
+        self.assertEqual(
+            pi.classify_budget_event('{"type":"tool_execution_end"}'), "tool"
+        )
+        self.assertIsNone(
+            pi.classify_budget_event('{"type":"tool_execution_start"}')
+        )
+        self.assertEqual(
+            opencode.classify_budget_event(
+                '{"type":"tool_use","part":{"state":{"status":"completed"}}}'
+            ),
+            "tool",
+        )
+        self.assertIsNone(
+            opencode.classify_budget_event(
+                '{"type":"tool_use","part":{"state":{"status":"running"}}}'
+            )
+        )
+        self.assertIsNone(
+            opencode.classify_budget_event('{"type":"step_finish"}')
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
