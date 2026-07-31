@@ -250,14 +250,16 @@
           export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
           export AGENT_EVAL_DOCKER_IMAGE_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
           if [[ -r "$AGENT_EVAL_AGENT_TOOLS/.versions" ]]; then
-            export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$(
+            agent_tools_versions="$(
               tr -d '\r\n' <"$AGENT_EVAL_AGENT_TOOLS/.versions"
             )"
+            export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$agent_tools_versions"
           fi
           if [[ -r "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" ]]; then
-            export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$(
+            agent_tools_lock_sha256="$(
               sha256sum "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" | cut -d' ' -f1
             )"
+            export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$agent_tools_lock_sha256"
           fi
 
           export OPENAI_API_BASE="''${OPENAI_API_BASE:-http://127.0.0.1:58000/v1}"
