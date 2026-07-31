@@ -599,6 +599,7 @@ rules
 examples
 agent_tool_profile
 agent_thinking
+agent_max_input_tokens
 agent_max_tool_calls
 agent_max_turns
 agent_timeout
@@ -653,6 +654,7 @@ with_agent
 with_agent_timeout
 with_agent_max_turns
 with_agent_max_tool_calls
+with_agent_max_input_tokens
 with_agent_thinking
 with_agent_tool_profile
 with_examples
@@ -1285,6 +1287,8 @@ Optional Packages:
   --with-agent-max-turns  Maximum Agent turns
   --with-agent-max-tool-calls
                           Maximum Agent tool calls
+  --with-agent-max-input-tokens
+                          Maximum Agent input context tokens
   --with-agent-thinking   Enable request-level Agent thinking: on or off
   --with-agent-tool-profile
                           Agent tool profile: base or rtl
@@ -1875,6 +1879,16 @@ fi
 
 
 
+
+# Check whether --with-agent-max-input-tokens was given.
+if test "${with_agent_max_input_tokens+set}" = set; then :
+  withval=$with_agent_max_input_tokens; agent_max_input_tokens="${with_agent_max_input_tokens}"
+else
+  agent_max_input_tokens=16384
+fi
+
+
+
 if test "${agent_timeout}" -ge 1 2>/dev/null; then :
 
 else
@@ -1886,6 +1900,11 @@ else
   as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
 fi
 if test "${agent_max_tool_calls}" -ge 1 2>/dev/null; then :
+
+else
+  as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
+fi
+if test "${agent_max_input_tokens}" -ge 1 2>/dev/null; then :
 
 else
   as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
@@ -1931,6 +1950,8 @@ $as_echo "$as_me: using Agent timeout: ${agent_timeout}" >&6;}
 $as_echo "$as_me: using Agent max turns: ${agent_max_turns}" >&6;}
 { $as_echo "$as_me:${as_lineno-$LINENO}: using Agent max tool calls: ${agent_max_tool_calls}" >&5
 $as_echo "$as_me: using Agent max tool calls: ${agent_max_tool_calls}" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent max input tokens: ${agent_max_input_tokens}" >&5
+$as_echo "$as_me: using Agent max input tokens: ${agent_max_input_tokens}" >&6;}
 { $as_echo "$as_me:${as_lineno-$LINENO}: using Agent thinking: ${agent_thinking}" >&5
 $as_echo "$as_me: using Agent thinking: ${agent_thinking}" >&6;}
 { $as_echo "$as_me:${as_lineno-$LINENO}: using Agent tool profile: ${agent_tool_profile}" >&5

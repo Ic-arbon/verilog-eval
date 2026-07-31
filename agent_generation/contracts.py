@@ -66,6 +66,7 @@ class AgentRunRequest:
     timeout_seconds: int
     max_turns: int
     max_tool_calls: int
+    max_input_tokens: int
     per_call_max_tokens: int
 
     def __post_init__(self) -> None:
@@ -80,6 +81,7 @@ class AgentRunRequest:
         _require_positive("timeout_seconds", self.timeout_seconds)
         _require_positive("max_turns", self.max_turns)
         _require_positive("max_tool_calls", self.max_tool_calls)
+        _require_positive("max_input_tokens", self.max_input_tokens)
         _require_positive("per_call_max_tokens", self.per_call_max_tokens)
 
 

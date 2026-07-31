@@ -40,6 +40,7 @@ class AgentGeneratorConfig:
     timeout_seconds: int
     max_turns: int
     max_tool_calls: int
+    max_input_tokens: int
     per_call_max_tokens: int
     rules_text: Optional[str]
     runtime_provenance: RuntimeProvenance = RuntimeProvenance()
@@ -115,6 +116,7 @@ def run_agent_generation(
             timeout_seconds=config.timeout_seconds,
             max_turns=config.max_turns,
             max_tool_calls=config.max_tool_calls,
+            max_input_tokens=config.max_input_tokens,
             per_call_max_tokens=config.per_call_max_tokens,
         )
         driver.write_config(request)
@@ -176,6 +178,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--agent-timeout", type=int, default=300)
     parser.add_argument("--agent-max-turns", type=int, default=20)
     parser.add_argument("--agent-max-tool-calls", type=int, default=50)
+    parser.add_argument("--agent-max-input-tokens", type=int, default=16384)
     parser.add_argument(
         "--agent-tool-profile", choices=("base", "rtl"), default="base"
     )
@@ -286,6 +289,7 @@ def main(
             timeout_seconds=args.agent_timeout,
             max_turns=args.agent_max_turns,
             max_tool_calls=args.agent_max_tool_calls,
+            max_input_tokens=args.agent_max_input_tokens,
             per_call_max_tokens=args.max_tokens,
             rules_text=selected_rules(args.task, args.rules),
             runtime_provenance=RuntimeProvenance(

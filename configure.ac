@@ -101,11 +101,19 @@ AC_ARG_WITH(agent-max-tool-calls,
   [agent_max_tool_calls=50])
 AC_SUBST([agent_max_tool_calls])
 
+AC_ARG_WITH(agent-max-input-tokens,
+  AS_HELP_STRING([--with-agent-max-input-tokens],[Maximum Agent input context tokens]),
+  [agent_max_input_tokens="${with_agent_max_input_tokens}"],
+  [agent_max_input_tokens=16384])
+AC_SUBST([agent_max_input_tokens])
+
 AS_IF([test "${agent_timeout}" -ge 1 2>/dev/null], [],
   [AC_MSG_ERROR([Agent budgets must be positive integers])])
 AS_IF([test "${agent_max_turns}" -ge 1 2>/dev/null], [],
   [AC_MSG_ERROR([Agent budgets must be positive integers])])
 AS_IF([test "${agent_max_tool_calls}" -ge 1 2>/dev/null], [],
+  [AC_MSG_ERROR([Agent budgets must be positive integers])])
+AS_IF([test "${agent_max_input_tokens}" -ge 1 2>/dev/null], [],
   [AC_MSG_ERROR([Agent budgets must be positive integers])])
 
 AC_ARG_WITH(agent-thinking,
@@ -131,6 +139,7 @@ AC_SUBST([agent_tool_profile])
 AC_MSG_NOTICE([using Agent timeout: ${agent_timeout}])
 AC_MSG_NOTICE([using Agent max turns: ${agent_max_turns}])
 AC_MSG_NOTICE([using Agent max tool calls: ${agent_max_tool_calls}])
+AC_MSG_NOTICE([using Agent max input tokens: ${agent_max_input_tokens}])
 AC_MSG_NOTICE([using Agent thinking: ${agent_thinking}])
 AC_MSG_NOTICE([using Agent tool profile: ${agent_tool_profile}])
 

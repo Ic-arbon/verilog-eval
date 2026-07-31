@@ -86,7 +86,7 @@ class PiDriverTests(unittest.TestCase):
             self.assertIn("chat text is never a submission", system_prompt)
             self.assertEqual(command[-1], ARTIFACT_INSTRUCTION)
             self.assertEqual(command[command.index("--thinking") + 1], "high")
-            self.assertEqual(driver.profile_id, "pi-artifact-thinking-v2")
+            self.assertEqual(driver.profile_id, "pi-artifact-thinking-v3")
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(
@@ -167,6 +167,7 @@ class OpenCodeDriverTests(unittest.TestCase):
             )
             self.assertEqual(command[command.index("--agent") + 1], "benchmark")
             self.assertEqual(command[-1], ARTIFACT_INSTRUCTION)
+            self.assertEqual(driver.profile_id, "opencode-artifact-no-thinking-v2")
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(

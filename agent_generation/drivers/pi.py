@@ -35,21 +35,21 @@ class PiDriver:
     base_url: str
     api_key_environment: str = "OPENAI_API_KEY"
     thinking_enabled: bool = True
-    context_window: int = 262144
 
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
-        if self.context_window <= 0:
-            raise ValueError("context_window must be a positive integer")
 
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"pi-artifact-{suffix}-v2"
+        return f"pi-artifact-{suffix}-v3"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
-        config_path = request.workspace / ".agent-config" / "pi" / "models.json"
+        config_dir = request.workspace / ".agent-config" / "pi"
+        config_path = config_dir / "models.json"
+        settings_path = config_dir / "settings.json"
+        context_window = request.max_input_tokens + request.per_call_max_tokens
         config = {
             "providers": {
                 PI_PROVIDER: {
@@ -69,7 +69,7 @@ class PiDriver:
                             "name": request.model,
                             "reasoning": True,
                             "input": ["text"],
-                            "contextWindow": self.context_window,
+                            "contextWindow": context_window,
                             "maxTokens": request.per_call_max_tokens,
                             "cost": {
                                 "input": 0,
@@ -82,7 +82,17 @@ class PiDriver:
                 }
             }
         }
-        return (write_json(config_path, config),)
+        settings = {
+            "compaction": {
+                "enabled": True,
+                "reserveTokens": request.per_call_max_tokens,
+                "keepRecentTokens": max(1, request.max_input_tokens // 2),
+            }
+        }
+        return (
+            write_json(config_path, config),
+            write_json(settings_path, settings),
+        )
 
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
         thinking_level = "high" if self.thinking_enabled else "off"

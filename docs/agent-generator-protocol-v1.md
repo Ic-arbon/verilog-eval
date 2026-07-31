@@ -267,6 +267,7 @@ class AgentRunRequest:
     timeout_seconds: int
     max_turns: int
     max_tool_calls: int
+    max_input_tokens: int
     per_call_max_tokens: int
 ```
 
@@ -417,7 +418,7 @@ The Agent producer writes one manifest per sample:
   "producer": {
     "kind": "agent",
     "agent": "opencode",
-    "profile": "opencode-artifact-thinking-v1",
+    "profile": "opencode-artifact-thinking-v2",
     "model": "qwen3.6-coder"
   },
   "execution": {

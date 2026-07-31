@@ -103,8 +103,10 @@ implicitly: `AGENT_EVAL_AGENT_TOOLS` must name an explicit prefix containing
 or a locally built, source-modified version. The Nix app validates the selected
 binary and records a deterministic digest of the complete prefix before loading
 the Docker image, configuring `build/agent-nix-eval-*`, and executing Make. Its
-Agent defaults are one sample, `qwen3.6-coder`, an 8192-token per-call limit,
-300-second wall timeout, temperature 0.6, top-p 0.95, and Qwen thinking enabled.
+Agent defaults are one sample, `qwen3.6-coder`, a 16384-token input budget,
+an 8192-token per-call output limit, a 300-second wall timeout, temperature 0.6,
+top-p 0.95, and Qwen thinking enabled. Drivers therefore advertise a 24576-token
+total context window while the vLLM deployment remains unchanged.
 Append configure options after `--` to override them.
 
 Each sample receives a fresh Docker container with only its public workspace and

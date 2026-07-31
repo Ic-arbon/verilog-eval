@@ -46,6 +46,7 @@ ifeq ($(generator),agent)
   GENERATE_FLAGS += "--agent-timeout=@agent_timeout@"
   GENERATE_FLAGS += "--agent-max-turns=@agent_max_turns@"
   GENERATE_FLAGS += "--agent-max-tool-calls=@agent_max_tool_calls@"
+  GENERATE_FLAGS += "--agent-max-input-tokens=@agent_max_input_tokens@"
   GENERATE_FLAGS += "--agent-thinking=@agent_thinking@"
   GENERATE_FLAGS += "--agent-tool-profile=@agent_tool_profile@"
 endif

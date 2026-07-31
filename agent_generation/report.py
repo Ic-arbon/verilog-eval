@@ -16,6 +16,13 @@ GENERATION_SCHEMA_VERSION = "agent-generation/v1"
 EXECUTION_STATUSES = frozenset({"completed", "timeout", "error"})
 SUBMISSION_STATUSES = frozenset({"published", "missing", "invalid"})
 USAGE_FIELDS = ("input_tokens", "output_tokens", "turns", "tool_calls")
+LIMIT_FIELDS = (
+    "timeout_seconds",
+    "max_turns",
+    "max_tool_calls",
+    "max_input_tokens",
+    "per_call_max_tokens",
+)
 RUNTIME_FIELDS = (
     "source_revision",
     "source_diff_sha256",
@@ -79,6 +86,11 @@ def _read_manifest(path: Path, expected_sample_id: str) -> dict[str, Any]:
     ):
         raise ReportError(f"invalid execution exit code in {path}")
     _number(execution.get("duration_seconds"), f"duration in {path}")
+
+    limits = _mapping(manifest.get("limits"), f"limits in {path}")
+    for field in LIMIT_FIELDS:
+        if _integer(limits.get(field), f"limits.{field} in {path}") == 0:
+            raise ReportError(f"limits.{field} must be positive in {path}")
 
     submission = _mapping(manifest.get("submission"), f"submission in {path}")
     if submission.get("status") not in SUBMISSION_STATUSES:
@@ -172,6 +184,7 @@ def build_agent_report(summary_csv: Path) -> dict[str, Any]:
                         },
                         "producer": manifest["producer"],
                         "execution": manifest["execution"],
+                        "limits": manifest["limits"],
                         "submission": manifest["submission"],
                         "usage": manifest["usage"],
                         "runtime": manifest.get("runtime"),

@@ -91,6 +91,7 @@ Nix Agent app默认值：
 | `--with-task` | `spec-to-rtl` | 也支持`code-complete-iccad2023` |
 | `--with-samples` | `1` | 正式Pass@1配置 |
 | `--with-examples` | `0` | Agent当前只支持零shot staging |
+| `--with-agent-max-input-tokens` | `16384` | 每次请求可用输入上下文预算 |
 | `--with-max-tokens` | `8192` | 每次模型调用输出上限 |
 | `--with-temperature` | `0.6` | OpenCode采样参数 |
 | `--with-top-p` | `0.95` | OpenCode采样参数 |
@@ -102,7 +103,9 @@ Nix Agent app默认值：
 
 `--with-agent-thinking=off`只允许Qwen模型。OpenCode通过模型配置中的
 `chat_template_kwargs.enable_thinking`控制；Pi使用其Qwen thinking兼容格式。
-不修改正在运行的vLLM部署。
+不修改正在运行的vLLM部署。Driver把输入预算与输出上限相加，因此默认向
+Agent声明`24576`总context；OpenCode在约`16384`输入处压缩，Pi使用显式
+`reserveTokens=8192`和`keepRecentTokens=8192`实现相同阈值。
 
 并发由宿主环境控制：
 
@@ -185,13 +188,14 @@ symlink会被拒绝。
 当前profile：
 
 ```text
-pi-artifact-thinking-v2
-pi-artifact-no-thinking-v2
-opencode-artifact-thinking-v1
-opencode-artifact-no-thinking-v1
+pi-artifact-thinking-v3
+pi-artifact-no-thinking-v3
+opencode-artifact-thinking-v2
+opencode-artifact-no-thinking-v2
 ```
 
-Pi v2系统提示明确要求调用`write`或`edit`创建artifact；它仍不允许将聊天
+Pi v3系统提示明确要求调用`write`或`edit`创建artifact，并显式配置输入
+context压缩预算；它仍不允许将聊天
 代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。API key只以
 显式允许的环境变量传入container，不写入配置、manifest或命令行。
 
@@ -245,6 +249,8 @@ build/agent-nix-eval-<hash>/
 ```text
 producer
 execution.status / exit_code / duration_seconds
+limits.timeout_seconds / max_turns / max_tool_calls
+limits.max_input_tokens / per_call_max_tokens
 submission.status / sha256 / size_bytes
 usage.input_tokens / output_tokens / turns / tool_calls / usage_source
 runtime.source_revision / source_diff_sha256 / docker_image_id

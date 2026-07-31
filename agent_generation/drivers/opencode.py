@@ -32,22 +32,20 @@ class OpenCodeDriver:
     temperature: float = 0.6
     top_p: float = 0.95
     thinking_enabled: bool = True
-    context_window: int = 262144
 
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
         validate_sampling(self.temperature, self.top_p)
-        if self.context_window <= 0:
-            raise ValueError("context_window must be a positive integer")
 
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"opencode-artifact-{suffix}-v1"
+        return f"opencode-artifact-{suffix}-v2"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_path = request.workspace / ".agent-config" / "opencode.json"
+        context_window = request.max_input_tokens + request.per_call_max_tokens
         config = {
             "$schema": "https://opencode.ai/config.json",
             "agent": {
@@ -88,7 +86,7 @@ class OpenCodeDriver:
                             "tool_call": True,
                             "interleaved": {"field": "reasoning_content"},
                             "limit": {
-                                "context": self.context_window,
+                                "context": context_window,
                                 "output": request.per_call_max_tokens,
                             },
                             "options": {

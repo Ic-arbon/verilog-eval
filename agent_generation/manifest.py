@@ -66,6 +66,13 @@ def write_generation_sidecars(
             "exit_code": process.exit_code,
             "duration_seconds": process.duration_seconds,
         },
+        "limits": {
+            "timeout_seconds": request.timeout_seconds,
+            "max_turns": request.max_turns,
+            "max_tool_calls": request.max_tool_calls,
+            "max_input_tokens": request.max_input_tokens,
+            "per_call_max_tokens": request.per_call_max_tokens,
+        },
         "submission": {
             "status": submission.status,
             "sha256": submission.sha256,

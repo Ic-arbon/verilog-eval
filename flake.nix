@@ -350,6 +350,7 @@
             --with-agent-timeout=300
             --with-agent-max-turns=20
             --with-agent-max-tool-calls=50
+            --with-agent-max-input-tokens=16384
             --with-agent-thinking=on
             --with-agent-tool-profile=base
             --with-samples=1
