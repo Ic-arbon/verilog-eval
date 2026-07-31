@@ -31,8 +31,24 @@ scripts_dir  := $(src_dir)/scripts
 # Programs
 #-------------------------------------------------------------------------
 
-GENERATE_VERILOG=$(scripts_dir)/sv-generate
+generator=@generator@
+
+ifeq ($(generator),agent)
+  GENERATE_VERILOG=$(scripts_dir)/sv-agent-generate
+else
+  GENERATE_VERILOG=$(scripts_dir)/sv-generate
+endif
+
 GENERATE_FLAGS = "--model=@model@"
+
+ifeq ($(generator),agent)
+  GENERATE_FLAGS += "--agent=@agent@"
+  GENERATE_FLAGS += "--agent-timeout=@agent_timeout@"
+  GENERATE_FLAGS += "--agent-max-turns=@agent_max_turns@"
+  GENERATE_FLAGS += "--agent-max-tool-calls=@agent_max_tool_calls@"
+  GENERATE_FLAGS += "--agent-thinking=@agent_thinking@"
+  GENERATE_FLAGS += "--agent-tool-profile=@agent_tool_profile@"
+endif
 
 examples=@examples@
 ifeq ($(examples),yes)
@@ -121,8 +137,11 @@ sample_num_strs != seq --format "%02g" 1 $$($(1)_num_samples)
 
 # Generate verilog samples
 
-$(1)_sv_samples       := $$(patsubst %, $(1)/$(1)_sample%.sv, $$(sample_num_strs))
-$(1)_sv_generate_logs := $$(patsubst %, $(1)/$(1)_sample%-sv-generate.log, $$(sample_num_strs))
+$(1)_sv_samples             := $$(patsubst %, $(1)/$(1)_sample%.sv, $$(sample_num_strs))
+$(1)_sv_generate_logs       := $$(patsubst %, $(1)/$(1)_sample%-sv-generate.log, $$(sample_num_strs))
+$(1)_generation_manifests   := $$(patsubst %, $(1)/$(1)_sample%-generation.json, $$(sample_num_strs))
+$(1)_generation_trajectories := $$(patsubst %, $(1)/$(1)_sample%-trajectory.jsonl, $$(sample_num_strs))
+$(1)_generation_stderr_logs := $$(patsubst %, $(1)/$(1)_sample%-stderr.log, $$(sample_num_strs))
 
 $$($(1)_sv_samples) : %.sv : $(1)_prompt.txt
 	@$$(ECHO) Generating $$(notdir $$@) verilog
@@ -135,12 +154,20 @@ $(1)-sv-generate : $$($(1)_sv_samples)
 
 pregen_files += $$($(1)_sv_samples)
 pregen_files += $$($(1)_sv_generate_logs)
+ifeq ($(generator),agent)
+pregen_files += $$($(1)_generation_manifests)
+pregen_files += $$($(1)_generation_trajectories)
+pregen_files += $$($(1)_generation_stderr_logs)
+endif
 
 sv_generate_targets += $$($(1)_sv_samples)
 
 $(1)-sv-generate-clean :
 	rm -rf $$($(1)_sv_samples)
 	rm -rf $$($(1)_sv_generate_logs)
+	rm -rf $$($(1)_generation_manifests)
+	rm -rf $$($(1)_generation_trajectories)
+	rm -rf $$($(1)_generation_stderr_logs)
 
 # Test verilog samples
 

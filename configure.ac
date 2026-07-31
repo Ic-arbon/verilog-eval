@@ -56,6 +56,78 @@ AC_SUBST([model])
 AC_MSG_NOTICE([using model: ${model}])
 
 #-------------------------------------------------------------------------
+# Generator Program Protocol selection
+#-------------------------------------------------------------------------
+
+AC_ARG_WITH(generator,
+  AS_HELP_STRING([--with-generator],[Sample producer: model or agent]),
+  [generator="${with_generator}"],
+  [generator="model"])
+
+AS_CASE([${generator}],
+  [model|agent], [],
+  [AC_MSG_ERROR([--with-generator must be model or agent])])
+
+AC_SUBST([generator])
+AC_MSG_NOTICE([using generator: ${generator}])
+
+AC_ARG_WITH(agent,
+  AS_HELP_STRING([--with-agent],[External Agent: pi or opencode]),
+  [agent="${with_agent}"],
+  [agent="opencode"])
+
+AS_CASE([${agent}],
+  [pi|opencode], [],
+  [AC_MSG_ERROR([--with-agent must be pi or opencode])])
+
+AC_SUBST([agent])
+AC_MSG_NOTICE([using Agent: ${agent}])
+
+AC_ARG_WITH(agent-timeout,
+  AS_HELP_STRING([--with-agent-timeout],[Agent wall timeout in seconds]),
+  [agent_timeout="${with_agent_timeout}"],
+  [agent_timeout=300])
+AC_SUBST([agent_timeout])
+
+AC_ARG_WITH(agent-max-turns,
+  AS_HELP_STRING([--with-agent-max-turns],[Maximum Agent turns]),
+  [agent_max_turns="${with_agent_max_turns}"],
+  [agent_max_turns=20])
+AC_SUBST([agent_max_turns])
+
+AC_ARG_WITH(agent-max-tool-calls,
+  AS_HELP_STRING([--with-agent-max-tool-calls],[Maximum Agent tool calls]),
+  [agent_max_tool_calls="${with_agent_max_tool_calls}"],
+  [agent_max_tool_calls=50])
+AC_SUBST([agent_max_tool_calls])
+
+AC_ARG_WITH(agent-thinking,
+  AS_HELP_STRING([--with-agent-thinking],[Enable request-level Agent thinking: on or off]),
+  [agent_thinking="${with_agent_thinking}"],
+  [agent_thinking=on])
+
+AS_CASE([${agent_thinking}],
+  [on|off], [],
+  [AC_MSG_ERROR([--with-agent-thinking must be on or off])])
+AC_SUBST([agent_thinking])
+
+AC_ARG_WITH(agent-tool-profile,
+  AS_HELP_STRING([--with-agent-tool-profile],[Agent tool profile: base or rtl]),
+  [agent_tool_profile="${with_agent_tool_profile}"],
+  [agent_tool_profile=base])
+
+AS_CASE([${agent_tool_profile}],
+  [base|rtl], [],
+  [AC_MSG_ERROR([--with-agent-tool-profile must be base or rtl])])
+AC_SUBST([agent_tool_profile])
+
+AC_MSG_NOTICE([using Agent timeout: ${agent_timeout}])
+AC_MSG_NOTICE([using Agent max turns: ${agent_max_turns}])
+AC_MSG_NOTICE([using Agent max tool calls: ${agent_max_tool_calls}])
+AC_MSG_NOTICE([using Agent thinking: ${agent_thinking}])
+AC_MSG_NOTICE([using Agent tool profile: ${agent_tool_profile}])
+
+#-------------------------------------------------------------------------
 # --with-examples
 #-------------------------------------------------------------------------
 

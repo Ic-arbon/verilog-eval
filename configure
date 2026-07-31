@@ -597,6 +597,13 @@ samples
 task
 rules
 examples
+agent_tool_profile
+agent_thinking
+agent_max_tool_calls
+agent_max_turns
+agent_timeout
+agent
+generator
 model
 IVERILOG
 target_alias
@@ -641,6 +648,13 @@ ac_subst_files=''
 ac_user_opts='
 enable_option_checking
 with_model
+with_generator
+with_agent
+with_agent_timeout
+with_agent_max_turns
+with_agent_max_tool_calls
+with_agent_thinking
+with_agent_tool_profile
 with_examples
 with_rules
 with_task
@@ -1265,6 +1279,15 @@ Optional Packages:
   --with-PACKAGE[=ARG]    use PACKAGE [ARG=yes]
   --without-PACKAGE       do not use PACKAGE (same as --with-PACKAGE=no)
   --with-model            Large language model to use
+  --with-generator        Sample producer: model or agent
+  --with-agent            External Agent: pi or opencode
+  --with-agent-timeout    Agent wall timeout in seconds
+  --with-agent-max-turns  Maximum Agent turns
+  --with-agent-max-tool-calls
+                          Maximum Agent tool calls
+  --with-agent-thinking   Enable request-level Agent thinking: on or off
+  --with-agent-tool-profile
+                          Agent tool profile: base or rtl
   --with-examples         Include in-context learning examples with settable
                           number of shots
   --with-rules            Include in-context learning rules
@@ -1777,6 +1800,125 @@ fi
 
 { $as_echo "$as_me:${as_lineno-$LINENO}: using model: ${model}" >&5
 $as_echo "$as_me: using model: ${model}" >&6;}
+
+#-------------------------------------------------------------------------
+# Generator Program Protocol selection
+#-------------------------------------------------------------------------
+
+
+# Check whether --with-generator was given.
+if test "${with_generator+set}" = set; then :
+  withval=$with_generator; generator="${with_generator}"
+else
+  generator="model"
+fi
+
+
+case ${generator} in #(
+  model|agent) :
+     ;; #(
+  *) :
+    as_fn_error $? "--with-generator must be model or agent" "$LINENO" 5 ;;
+esac
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using generator: ${generator}" >&5
+$as_echo "$as_me: using generator: ${generator}" >&6;}
+
+
+# Check whether --with-agent was given.
+if test "${with_agent+set}" = set; then :
+  withval=$with_agent; agent="${with_agent}"
+else
+  agent="opencode"
+fi
+
+
+case ${agent} in #(
+  pi|opencode) :
+     ;; #(
+  *) :
+    as_fn_error $? "--with-agent must be pi or opencode" "$LINENO" 5 ;;
+esac
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent: ${agent}" >&5
+$as_echo "$as_me: using Agent: ${agent}" >&6;}
+
+
+# Check whether --with-agent-timeout was given.
+if test "${with_agent_timeout+set}" = set; then :
+  withval=$with_agent_timeout; agent_timeout="${with_agent_timeout}"
+else
+  agent_timeout=300
+fi
+
+
+
+
+# Check whether --with-agent-max-turns was given.
+if test "${with_agent_max_turns+set}" = set; then :
+  withval=$with_agent_max_turns; agent_max_turns="${with_agent_max_turns}"
+else
+  agent_max_turns=20
+fi
+
+
+
+
+# Check whether --with-agent-max-tool-calls was given.
+if test "${with_agent_max_tool_calls+set}" = set; then :
+  withval=$with_agent_max_tool_calls; agent_max_tool_calls="${with_agent_max_tool_calls}"
+else
+  agent_max_tool_calls=50
+fi
+
+
+
+
+# Check whether --with-agent-thinking was given.
+if test "${with_agent_thinking+set}" = set; then :
+  withval=$with_agent_thinking; agent_thinking="${with_agent_thinking}"
+else
+  agent_thinking=on
+fi
+
+
+case ${agent_thinking} in #(
+  on|off) :
+     ;; #(
+  *) :
+    as_fn_error $? "--with-agent-thinking must be on or off" "$LINENO" 5 ;;
+esac
+
+
+
+# Check whether --with-agent-tool-profile was given.
+if test "${with_agent_tool_profile+set}" = set; then :
+  withval=$with_agent_tool_profile; agent_tool_profile="${with_agent_tool_profile}"
+else
+  agent_tool_profile=base
+fi
+
+
+case ${agent_tool_profile} in #(
+  base|rtl) :
+     ;; #(
+  *) :
+    as_fn_error $? "--with-agent-tool-profile must be base or rtl" "$LINENO" 5 ;;
+esac
+
+
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent timeout: ${agent_timeout}" >&5
+$as_echo "$as_me: using Agent timeout: ${agent_timeout}" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent max turns: ${agent_max_turns}" >&5
+$as_echo "$as_me: using Agent max turns: ${agent_max_turns}" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent max tool calls: ${agent_max_tool_calls}" >&5
+$as_echo "$as_me: using Agent max tool calls: ${agent_max_tool_calls}" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent thinking: ${agent_thinking}" >&5
+$as_echo "$as_me: using Agent thinking: ${agent_thinking}" >&6;}
+{ $as_echo "$as_me:${as_lineno-$LINENO}: using Agent tool profile: ${agent_tool_profile}" >&5
+$as_echo "$as_me: using Agent tool profile: ${agent_tool_profile}" >&6;}
 
 #-------------------------------------------------------------------------
 # --with-examples
