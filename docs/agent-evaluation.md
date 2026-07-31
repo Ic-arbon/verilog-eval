@@ -40,20 +40,22 @@ configure
 - 可用的Docker daemon；
 - `http://127.0.0.1:58000/v1`上的`qwen3.6-coder`；
 - `/opt/llm/api-key.env`中的可选`VLLM_API_KEY`，或显式
-  `OPENAI_API_KEY`。
+  `OPENAI_API_KEY`；
+- 显式`AGENT_EVAL_AGENT_TOOLS`前缀，其中包含
+  `node_modules/.bin/<selected-agent>`。
 
 OpenCode单题：
 
 ```bash
 cd /opt/agent/verilog-eval
 printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
-VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
 ```
 
 Pi单题：
 
 ```bash
-VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=pi --with-problems=/tmp/agent-smoke.txt
+AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=pi --with-problems=/tmp/agent-smoke.txt
 ```
 
 命令建议保持单行；若拆行，每一行结尾必须保留反斜杠。否则后续
@@ -61,16 +63,17 @@ VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=pi --with-problems=/tmp
 
 Nix app会：
 
-1. 安装固定版本Pi和OpenCode到`.agent-tools`；
-2. 加载固定的Docker镜像archive；
-3. 检查vLLM health endpoint；
-4. 创建参数哈希对应的`build/agent-nix-eval-*`；
-5. 调用`configure`；
-6. `exec make`。
+1. 要求并验证显式Agent tools前缀；
+2. 计算完整tools内容摘要，不依赖目录名或mtime；
+3. 加载固定的Docker镜像archive；
+4. 检查vLLM health endpoint；
+5. 创建包含源码、endpoint、镜像与tools摘要的参数哈希目录；
+6. 调用`configure`并`exec make`。
 
 需要强制创建全新实验根目录时：
 
 ```bash
+AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" \
 VERILOG_EVAL_BUILD_ROOT="$PWD/build/my-fresh-run" \
 VERILOG_EVAL_JOBS=1 \
 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
@@ -160,12 +163,24 @@ agent_generation/drivers/pi.py
 agent_generation/drivers/opencode.py
 ```
 
-当前固定工具版本：
+已验证的官方工具版本：
 
 ```text
 Pi       0.82.1
 OpenCode 1.18.7
 ```
+
+评测不会自动安装它们。`AGENT_EVAL_AGENT_TOOLS`可以指向官方安装，也可以
+指向改过源码后构建出的prefix。prefix必须把所选CLI放在：
+
+```text
+<tools>/node_modules/.bin/pi
+<tools>/node_modules/.bin/opencode
+```
+
+只要求本次所选Agent对应的入口存在。每次run会记录完整目录内容摘要；路径和
+mtime不影响摘要，文件内容、可执行位和symlink目标会影响摘要。逃逸prefix的
+symlink会被拒绝。
 
 当前profile：
 
@@ -232,6 +247,9 @@ producer
 execution.status / exit_code / duration_seconds
 submission.status / sha256 / size_bytes
 usage.input_tokens / output_tokens / turns / tool_calls / usage_source
+runtime.source_revision / source_diff_sha256 / docker_image_id
+runtime.agent_tools_versions / agent_tools_lock_sha256 / agent_tools_content_sha256
+runtime.api_base_url
 ```
 
 典型正交组合：

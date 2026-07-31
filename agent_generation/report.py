@@ -23,6 +23,7 @@ RUNTIME_FIELDS = (
     "docker_image_id",
     "agent_tools_versions",
     "agent_tools_lock_sha256",
+    "agent_tools_content_sha256",
     "api_base_url",
 )
 

@@ -213,7 +213,6 @@
       runAgentEvaluation = pkgs.writeShellApplication {
         name = "verilog-agent-eval";
         runtimeInputs = with pkgs; [
-          setupAgentTools
           python311
           docker_29
           iverilog
@@ -242,10 +241,39 @@
           export VERILOG_EVAL_SOURCE_REVISION="$source_revision"
           export VERILOG_EVAL_SOURCE_DIFF_SHA256="$source_diff_sha256"
 
+          agent_name=opencode
+          for argument in "$@"; do
+            case "$argument" in
+              --with-agent=*) agent_name="''${argument#*=}" ;;
+            esac
+          done
+          case "$agent_name" in
+            pi|opencode) ;;
+            *)
+              echo "Agent must be pi or opencode" >&2
+              exit 2
+              ;;
+          esac
+
           if [[ -z "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
-            verilog-agent-tools-setup
-            export AGENT_EVAL_AGENT_TOOLS="$root/.agent-tools"
+            echo "AGENT_EVAL_AGENT_TOOLS must be set explicitly" >&2
+            exit 2
           fi
+          if [[ ! -d "$AGENT_EVAL_AGENT_TOOLS" ]]; then
+            echo "Explicit Agent tools prefix is not a directory" >&2
+            exit 2
+          fi
+          agent_tools="$(realpath -e -- "$AGENT_EVAL_AGENT_TOOLS")"
+          if [[ ! -x "$agent_tools/node_modules/.bin/$agent_name" ]]; then
+            echo "Explicit Agent tools prefix has no executable $agent_name" >&2
+            exit 2
+          fi
+          export AGENT_EVAL_AGENT_TOOLS="$agent_tools"
+          agent_tools_content_sha256="$(
+            "$root/scripts/agent-tools-digest" "$agent_tools"
+          )"
+          export AGENT_EVAL_AGENT_TOOLS_CONTENT_SHA256="$agent_tools_content_sha256"
+
           export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
           export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
           export AGENT_EVAL_DOCKER_IMAGE_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
@@ -337,6 +365,7 @@
               "$source_diff_sha256" \
               "$OPENAI_API_BASE" \
               "$image_id" \
+              "$agent_tools_content_sha256" \
               "''${AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256:-unavailable}" \
               "''${configure_args[@]}" \
               | sha256sum \

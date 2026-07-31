@@ -94,13 +94,16 @@ Start with one problem:
 
 ```sh
 printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
-VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
 ```
 
-Select Pi by changing `--with-agent=pi`. The Nix app installs pinned Agent tools,
-loads the pinned Docker image, checks the local vLLM endpoint, configures a
-separate `build/agent-nix-eval-*` directory, and executes Make. Its Agent
-defaults are one sample, `qwen3.6-coder`, an 8192-token per-call limit,
+Select Pi by changing `--with-agent=pi`. Agent tools are never installed
+implicitly: `AGENT_EVAL_AGENT_TOOLS` must name an explicit prefix containing
+`node_modules/.bin/<selected-agent>`. This can be an official npm installation
+or a locally built, source-modified version. The Nix app validates the selected
+binary and records a deterministic digest of the complete prefix before loading
+the Docker image, configuring `build/agent-nix-eval-*`, and executing Make. Its
+Agent defaults are one sample, `qwen3.6-coder`, an 8192-token per-call limit,
 300-second wall timeout, temperature 0.6, top-p 0.95, and Qwen thinking enabled.
 Append configure options after `--` to override them.
 

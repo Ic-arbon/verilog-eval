@@ -305,6 +305,9 @@ def main(
                 agent_tools_lock_sha256=runtime_environment.get(
                     "AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256"
                 ),
+                agent_tools_content_sha256=runtime_environment.get(
+                    "AGENT_EVAL_AGENT_TOOLS_CONTENT_SHA256"
+                ),
                 api_base_url=base_url,
             ),
         )

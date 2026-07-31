@@ -44,6 +44,7 @@ class RuntimeProvenance:
     docker_image_id: Optional[str] = None
     agent_tools_versions: Optional[str] = None
     agent_tools_lock_sha256: Optional[str] = None
+    agent_tools_content_sha256: Optional[str] = None
     api_base_url: Optional[str] = None
 
     def __post_init__(self) -> None:
