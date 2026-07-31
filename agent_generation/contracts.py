@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 
 SUPPORTED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
 PROCESS_STATUSES = frozenset({"completed", "timeout", "error"})
+TERMINATION_REASONS = frozenset({"timeout", "max_turns", "max_tool_calls"})
+BUDGET_EVENT_KINDS = frozenset({"turn", "tool"})
 SAMPLE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}")
 ENVIRONMENT_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
@@ -123,12 +125,20 @@ class ProcessResult:
     stdout: str
     stderr: str
     usage: AgentUsage
+    termination_reason: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.status not in PROCESS_STATUSES:
             raise ValueError(f"unsupported process status: {self.status}")
         if self.duration_seconds < 0:
             raise ValueError("duration_seconds must not be negative")
+        if (
+            self.termination_reason is not None
+            and self.termination_reason not in TERMINATION_REASONS
+        ):
+            raise ValueError(
+                f"unsupported termination reason: {self.termination_reason}"
+            )
 
 
 @dataclass(frozen=True)
@@ -157,11 +167,21 @@ class AgentProcessSpec:
     workspace: Path
     timeout_seconds: int
     environment: AgentEnvironment = AgentEnvironment()
+    max_turns: Optional[int] = None
+    max_tool_calls: Optional[int] = None
+    event_classifier: Optional[Callable[[str], Optional[str]]] = None
 
     def __post_init__(self) -> None:
         if not self.command or any(not argument for argument in self.command):
             raise ValueError("command must contain non-empty arguments")
         _require_positive("timeout_seconds", self.timeout_seconds)
+        if self.max_turns is not None:
+            _require_positive("max_turns", self.max_turns)
+        if self.max_tool_calls is not None:
+            _require_positive("max_tool_calls", self.max_tool_calls)
+        has_limits = self.max_turns is not None or self.max_tool_calls is not None
+        if has_limits != (self.event_classifier is not None):
+            raise ValueError("budget limits and event_classifier must be supplied together")
 
 
 @dataclass(frozen=True)

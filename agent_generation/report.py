@@ -15,6 +15,7 @@ REPORT_SCHEMA_VERSION = "agent-evaluation/v1"
 GENERATION_SCHEMA_VERSION = "agent-generation/v1"
 EXECUTION_STATUSES = frozenset({"completed", "timeout", "error"})
 SUBMISSION_STATUSES = frozenset({"published", "missing", "invalid"})
+TERMINATION_REASONS = frozenset({"timeout", "max_turns", "max_tool_calls"})
 USAGE_FIELDS = ("input_tokens", "output_tokens", "turns", "tool_calls")
 LIMIT_FIELDS = (
     "timeout_seconds",
@@ -86,6 +87,18 @@ def _read_manifest(path: Path, expected_sample_id: str) -> dict[str, Any]:
     ):
         raise ReportError(f"invalid execution exit code in {path}")
     _number(execution.get("duration_seconds"), f"duration in {path}")
+    termination_reason = execution.get("termination_reason")
+    if (
+        termination_reason is not None
+        and termination_reason not in TERMINATION_REASONS
+    ):
+        raise ReportError(f"invalid termination reason in {path}")
+    if termination_reason == "timeout" and execution.get("status") != "timeout":
+        raise ReportError(f"timeout termination status mismatch in {path}")
+    if termination_reason in {"max_turns", "max_tool_calls"} and execution.get(
+        "status"
+    ) != "error":
+        raise ReportError(f"budget termination status mismatch in {path}")
 
     limits = _mapping(manifest.get("limits"), f"limits in {path}")
     for field in LIMIT_FIELDS:

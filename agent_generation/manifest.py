@@ -65,6 +65,7 @@ def write_generation_sidecars(
             "status": process.status,
             "exit_code": process.exit_code,
             "duration_seconds": process.duration_seconds,
+            "termination_reason": process.termination_reason,
         },
         "limits": {
             "timeout_seconds": request.timeout_seconds,

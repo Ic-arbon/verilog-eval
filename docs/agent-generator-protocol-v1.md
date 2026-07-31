@@ -294,6 +294,8 @@ class ContainerSpec:
     workspace: Path
     agent_tools: Path
     timeout_seconds: int
+    max_turns: int
+    max_tool_calls: int
     environment: dict[str, str]
 
 @dataclass(frozen=True)
@@ -303,6 +305,7 @@ class ProcessResult:
     duration_seconds: float
     stdout: str
     stderr: str
+    termination_reason: Literal["timeout", "max_turns", "max_tool_calls"] | None
 ```
 
 ```python
@@ -333,8 +336,10 @@ Agent-local runtime state:
 └── tmp/
 ```
 
-The formal runtime uses one Docker container per sample. A host executor is
-allowed only in unit tests with a fake Agent.
+The formal runtime uses one Docker container per sample. The host streams
+machine events, counts completed turns/tools, and force-removes a container at
+its configured budget or wall deadline. A non-Docker executor is allowed only
+in unit tests with a fake Agent.
 
 ### Figure 5 — Isolation boundary and driver insertion (L3)
 

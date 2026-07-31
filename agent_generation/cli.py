@@ -128,6 +128,9 @@ def run_agent_generation(
                 workspace=prepared.root,
                 timeout_seconds=request.timeout_seconds,
                 environment=environment,
+                max_turns=request.max_turns,
+                max_tool_calls=request.max_tool_calls,
+                event_classifier=driver.classify_budget_event,
             )
         )
         if process.usage.usage_source == "unavailable":

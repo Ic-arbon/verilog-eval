@@ -134,3 +134,15 @@ class OpenCodeDriver:
 
     def parse_event(self, line: str) -> Optional[object]:
         return parse_json_object(line)
+
+    def classify_budget_event(self, line: str) -> Optional[str]:
+        event = self.parse_event(line)
+        if not isinstance(event, dict) or event.get("type") != "tool_use":
+            return None
+        part = event.get("part")
+        if not isinstance(part, dict):
+            return None
+        state = part.get("state")
+        if isinstance(state, dict) and state.get("status") == "completed":
+            return "tool"
+        return None

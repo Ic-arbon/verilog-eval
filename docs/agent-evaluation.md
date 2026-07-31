@@ -96,8 +96,8 @@ Nix Agent app默认值：
 | `--with-temperature` | `0.6` | OpenCode采样参数 |
 | `--with-top-p` | `0.95` | OpenCode采样参数 |
 | `--with-agent-timeout` | `300` | 每个外部Agent进程的硬wall timeout |
-| `--with-agent-max-turns` | `20` | Agent回合预算；OpenCode映射为steps |
-| `--with-agent-max-tool-calls` | `50` | Agent工具调用预算参数 |
+| `--with-agent-max-turns` | `20` | 回合硬预算；Pi由宿主事件流终止，OpenCode映射为steps |
+| `--with-agent-max-tool-calls` | `50` | 完成工具调用硬预算，由宿主事件流终止 |
 | `--with-agent-thinking` | `on` | Qwen request-level thinking开关 |
 | `--with-agent-tool-profile` | `base` | `base`或`rtl`镜像 |
 
@@ -223,7 +223,9 @@ unique container name and cidfile
 ```
 
 宿主以root运行时，workspace在启动前转交给`65534:65534`。超过wall
- timeout后，executor执行`docker rm --force`并在返回前确认清理成功。
+ timeout后，executor执行`docker rm --force`并在返回前确认清理成功。Pi的
+`turn_end`以及两种Agent的完成工具事件由宿主实时计数；达到预算时同样强制
+删除container，分别记录`max_turns`或`max_tool_calls`终止原因。
 
 ## 7. 输出
 
@@ -248,7 +250,7 @@ build/agent-nix-eval-<hash>/
 
 ```text
 producer
-execution.status / exit_code / duration_seconds
+execution.status / exit_code / duration_seconds / termination_reason
 limits.timeout_seconds / max_turns / max_tool_calls
 limits.max_input_tokens / per_call_max_tokens
 submission.status / sha256 / size_bytes
@@ -300,9 +302,10 @@ tests/integration/agent-docker-isolation-smoke
 该测试使用假Agent主动搜索隐藏grader文件、宿主repo、Docker socket和未授权
 环境变量。它不调用模型。
 
-真实Docker超时清理：
+真实Docker预算终止与超时清理：
 
 ```bash
+tests/integration/agent-docker-budget-smoke
 tests/integration/agent-docker-timeout-smoke
 ```
 

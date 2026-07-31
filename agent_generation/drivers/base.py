@@ -40,6 +40,9 @@ class AgentDriver(Protocol):
     def parse_event(self, line: str) -> Optional[object]:
         ...
 
+    def classify_budget_event(self, line: str) -> Optional[str]:
+        ...
+
 
 class AgentExecutor(Protocol):
     """Execute one already-built Agent process specification."""

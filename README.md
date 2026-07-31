@@ -107,7 +107,9 @@ Agent defaults are one sample, `qwen3.6-coder`, a 16384-token input budget,
 an 8192-token per-call output limit, a 300-second wall timeout, temperature 0.6,
 top-p 0.95, and Qwen thinking enabled. Drivers therefore advertise a 24576-token
 total context window while the vLLM deployment remains unchanged.
-Append configure options after `--` to override them.
+Append configure options after `--` to override them. The host streams Agent
+events and force-removes the container when Pi reaches its turn budget or either
+Agent reaches its completed-tool budget.
 
 Each sample receives a fresh Docker container with only its public workspace and
 a read-only Agent-tools mount. Dataset directories, hidden references and
