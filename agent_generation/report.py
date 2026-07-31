@@ -16,6 +16,15 @@ GENERATION_SCHEMA_VERSION = "agent-generation/v1"
 EXECUTION_STATUSES = frozenset({"completed", "timeout", "error"})
 SUBMISSION_STATUSES = frozenset({"published", "missing", "invalid"})
 USAGE_FIELDS = ("input_tokens", "output_tokens", "turns", "tool_calls")
+RUNTIME_FIELDS = (
+    "source_revision",
+    "source_diff_sha256",
+    "docker_image",
+    "docker_image_id",
+    "agent_tools_versions",
+    "agent_tools_lock_sha256",
+    "api_base_url",
+)
 
 
 class ReportError(ValueError):
@@ -79,6 +88,18 @@ def _read_manifest(path: Path, expected_sample_id: str) -> dict[str, Any]:
         _integer(usage.get(field), f"usage.{field} in {path}", optional=True)
     if not isinstance(usage.get("usage_source"), str) or not usage["usage_source"]:
         raise ReportError(f"invalid usage source in {path}")
+
+    runtime = manifest.get("runtime")
+    if runtime is not None:
+        runtime = _mapping(runtime, f"runtime in {path}")
+        for field in RUNTIME_FIELDS:
+            value = runtime.get(field)
+            if value is not None and (
+                not isinstance(value, str)
+                or not value
+                or any(character in value for character in "\r\n\x00")
+            ):
+                raise ReportError(f"invalid runtime.{field} in {path}")
     return manifest
 
 
@@ -152,6 +173,7 @@ def build_agent_report(summary_csv: Path) -> dict[str, Any]:
                         "execution": manifest["execution"],
                         "submission": manifest["submission"],
                         "usage": manifest["usage"],
+                        "runtime": manifest.get("runtime"),
                         "manifest": str(manifest_path.relative_to(root)),
                     }
                 )
