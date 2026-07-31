@@ -53,10 +53,10 @@ health endpoint before starting, so no environment variables are normally
 needed. The explicit entry point is `nix run .#vllm`.
 
 The runner installs the pinned Python dependencies when needed, defaults to
-the low-temperature Pass@1 configuration (`samples=1`, `max_tokens=8192`,
-`temperature=0`, `top_p=0.01`), and runs Make with one parallel job per
-available CPU core. The larger response limit leaves room for reasoning models
-to finish their answer before emitting the final Verilog code.
+the Pass@1 configuration (`samples=1`, `max_tokens=8192`, `temperature=0.6`,
+`top_p=0.95`), and runs Make with one parallel job per available CPU core. The
+larger response limit leaves room for reasoning models to finish their answer
+before emitting the final Verilog code.
 Configure options can be appended after `--`, for example:
 
 ```sh
