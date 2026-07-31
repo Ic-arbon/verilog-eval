@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
@@ -19,6 +19,7 @@ from agent_generation.drivers.base import AgentDriver, AgentExecutor
 from agent_generation.drivers.opencode import OpenCodeDriver
 from agent_generation.drivers.pi import PiDriver
 from agent_generation.manifest import write_generation_sidecars
+from agent_generation.metrics import aggregate_trajectory_usage
 from agent_generation.submission import publish_submission
 from agent_generation.task import selected_rules
 from agent_generation.workspace import staged_workspace
@@ -125,6 +126,11 @@ def run_agent_generation(
                 environment=environment,
             )
         )
+        if process.usage.usage_source == "unavailable":
+            process = replace(
+                process,
+                usage=aggregate_trajectory_usage(driver, process.stdout),
+            )
         submission = publish_submission(
             prepared.root,
             config.output_path,
