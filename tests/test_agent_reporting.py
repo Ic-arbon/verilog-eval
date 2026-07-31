@@ -58,6 +58,7 @@ def write_manifest(
                     "docker_image_id": "sha256:" + "3" * 64,
                     "agent_tools_versions": "pi=0.82.1 opencode=1.18.7",
                     "agent_tools_lock_sha256": "4" * 64,
+                    "agent_tools_content_sha256": "5" * 64,
                     "api_base_url": "http://127.0.0.1:58000/v1",
                 },
                 "usage": {

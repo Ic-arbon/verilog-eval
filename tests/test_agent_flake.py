@@ -32,6 +32,12 @@ class AgentFlakeIntegrationTests(unittest.TestCase):
         self.assertIn("AGENT_EVAL_DOCKER_IMAGE_BASE", agent_app)
         self.assertIn("AGENT_EVAL_DOCKER_IMAGE_RTL", agent_app)
         self.assertIn("AGENT_EVAL_AGENT_TOOLS", agent_app)
+        self.assertIn(
+            "AGENT_EVAL_AGENT_TOOLS must be set explicitly",
+            agent_app,
+        )
+        self.assertNotIn("verilog-agent-tools-setup", agent_app)
+        self.assertIn("agent_tools_content_sha256", agent_app)
         self.assertIn("OPENAI_API_BASE", agent_app)
         self.assertIn("OPENAI_API_KEY", agent_app)
         self.assertIn("VERILOG_EVAL_SOURCE_REVISION", agent_app)

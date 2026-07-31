@@ -165,6 +165,7 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
                         docker_image="verilog-eval-agent-sandbox:v1",
                         docker_image_id="sha256:" + "3" * 64,
                         agent_tools_versions="pi=0.82.1 opencode=1.18.7",
+                        agent_tools_content_sha256="5" * 64,
                     ),
                 }
             )
@@ -211,6 +212,9 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(
                 manifest["runtime"]["agent_tools_versions"],
                 "pi=0.82.1 opencode=1.18.7",
+            )
+            self.assertEqual(
+                manifest["runtime"]["agent_tools_content_sha256"], "5" * 64
             )
             self.assertNotIn("workspace", json.dumps(manifest))
 
