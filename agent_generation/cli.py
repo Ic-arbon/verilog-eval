@@ -2,18 +2,25 @@
 
 from __future__ import annotations
 
+import argparse
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional, Sequence
 
 from agent_generation.contracts import (
     AgentGenerationResult,
     AgentProcessSpec,
     AgentRunRequest,
 )
+from agent_generation.docker import DockerExecutor, DockerInfrastructureError
 from agent_generation.drivers.base import AgentDriver, AgentExecutor
+from agent_generation.drivers.opencode import OpenCodeDriver
+from agent_generation.drivers.pi import PiDriver
 from agent_generation.manifest import write_generation_sidecars
 from agent_generation.submission import publish_submission
+from agent_generation.task import selected_rules
 from agent_generation.workspace import staged_workspace
 
 
@@ -136,3 +143,148 @@ def run_agent_generation(
 
     _print_generation_log(result)
     return result
+
+
+def _argument_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Generate one VerilogEval sample with an external Agent"
+    )
+    parser.add_argument("--agent", choices=("pi", "opencode"), required=True)
+    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--task",
+        choices=("spec-to-rtl", "code-complete-iccad2023"),
+        required=True,
+    )
+    parser.add_argument("--examples", type=int, default=0)
+    parser.add_argument("--rules", action="store_true")
+    parser.add_argument("--max-tokens", type=int, default=8192)
+    parser.add_argument("--temperature", type=float, default=0.6)
+    parser.add_argument("--top-p", type=float, default=0.95)
+    parser.add_argument(
+        "--agent-thinking", choices=("on", "off"), default="on"
+    )
+    parser.add_argument("--agent-timeout", type=int, default=300)
+    parser.add_argument("--agent-max-turns", type=int, default=20)
+    parser.add_argument("--agent-max-tool-calls", type=int, default=50)
+    parser.add_argument(
+        "--agent-tool-profile", choices=("base", "rtl"), default="base"
+    )
+    parser.add_argument("--base-url")
+    parser.add_argument("--api-key-environment", default="OPENAI_API_KEY")
+    parser.add_argument("--docker-path")
+    parser.add_argument("--docker-image")
+    parser.add_argument("--agent-tools", type=Path)
+    parser.add_argument("--work-root", type=Path)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("prompt_filename", type=Path)
+    return parser
+
+
+def _driver_from_args(args: argparse.Namespace, base_url: str) -> AgentDriver:
+    common = {
+        "base_url": base_url,
+        "api_key_environment": args.api_key_environment,
+        "thinking_enabled": args.agent_thinking == "on",
+    }
+    if args.agent == "pi":
+        return PiDriver(**common)
+    return OpenCodeDriver(
+        **common,
+        temperature=args.temperature,
+        top_p=args.top_p,
+    )
+
+
+def _required_path(
+    explicit: Optional[Path],
+    environment: Mapping[str, str],
+    name: str,
+) -> Path:
+    value = explicit or (Path(environment[name]) if environment.get(name) else None)
+    if value is None:
+        raise DockerInfrastructureError(f"{name} is required")
+    return value
+
+
+def _executor_from_args(
+    args: argparse.Namespace,
+    environment: Mapping[str, str],
+) -> DockerExecutor:
+    profile_suffix = "BASE" if args.agent_tool_profile == "base" else "RTL"
+    image = args.docker_image or environment.get(
+        f"AGENT_EVAL_DOCKER_IMAGE_{profile_suffix}"
+    )
+    if not image:
+        raise DockerInfrastructureError(
+            f"AGENT_EVAL_DOCKER_IMAGE_{profile_suffix} is required"
+        )
+    docker_path = args.docker_path or environment.get("AGENT_EVAL_DOCKER", "docker")
+    agent_tools = _required_path(
+        args.agent_tools,
+        environment,
+        "AGENT_EVAL_AGENT_TOOLS",
+    )
+    return DockerExecutor(
+        docker_path=docker_path,
+        image=image,
+        agent_tools=agent_tools,
+        uid=os.getuid(),
+        gid=os.getgid(),
+        host_environment=environment,
+    )
+
+
+def main(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    driver: Optional[AgentDriver] = None,
+    executor: Optional[AgentExecutor] = None,
+    environment: Optional[Mapping[str, str]] = None,
+) -> int:
+    parser = _argument_parser()
+    args = parser.parse_args(argv)
+    runtime_environment = dict(os.environ if environment is None else environment)
+
+    if args.examples < 0:
+        parser.error("--examples must not be negative")
+    if args.examples != 0:
+        parser.error("Agent examples are not implemented yet; use --examples=0")
+
+    try:
+        base_url = args.base_url or runtime_environment.get(
+            "OPENAI_API_BASE", "http://127.0.0.1:58000/v1"
+        )
+        selected_driver = driver or _driver_from_args(args, base_url)
+        selected_executor = executor or _executor_from_args(
+            args, runtime_environment
+        )
+        output_path = args.output.resolve()
+        work_root = (
+            args.work_root.resolve()
+            if args.work_root is not None
+            else output_path.parent / ".agent-work"
+        )
+        config = AgentGeneratorConfig(
+            sample_id=output_path.stem,
+            agent_name=args.agent,
+            model=args.model,
+            task=args.task,
+            prompt_path=args.prompt_filename.resolve(),
+            output_path=output_path,
+            work_root=work_root,
+            timeout_seconds=args.agent_timeout,
+            max_turns=args.agent_max_turns,
+            max_tool_calls=args.agent_max_tool_calls,
+            per_call_max_tokens=args.max_tokens,
+            rules_text=selected_rules(args.task, args.rules),
+        )
+        run_agent_generation(config, selected_driver, selected_executor)
+    except DockerInfrastructureError as error:
+        print(f"ERROR: Agent sandbox infrastructure failed: {error}", file=sys.stderr)
+        return 3
+    except (FileNotFoundError, ValueError) as error:
+        print(f"ERROR: Invalid Agent generation request: {error}", file=sys.stderr)
+        return 2
+    return 0
