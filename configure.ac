@@ -101,6 +101,13 @@ AC_ARG_WITH(agent-max-tool-calls,
   [agent_max_tool_calls=50])
 AC_SUBST([agent_max_tool_calls])
 
+AS_IF([test "${agent_timeout}" -ge 1 2>/dev/null], [],
+  [AC_MSG_ERROR([Agent budgets must be positive integers])])
+AS_IF([test "${agent_max_turns}" -ge 1 2>/dev/null], [],
+  [AC_MSG_ERROR([Agent budgets must be positive integers])])
+AS_IF([test "${agent_max_tool_calls}" -ge 1 2>/dev/null], [],
+  [AC_MSG_ERROR([Agent budgets must be positive integers])])
+
 AC_ARG_WITH(agent-thinking,
   AS_HELP_STRING([--with-agent-thinking],[Enable request-level Agent thinking: on or off]),
   [agent_thinking="${with_agent_thinking}"],

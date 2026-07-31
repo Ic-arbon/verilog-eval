@@ -1875,6 +1875,22 @@ fi
 
 
 
+if test "${agent_timeout}" -ge 1 2>/dev/null; then :
+
+else
+  as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
+fi
+if test "${agent_max_turns}" -ge 1 2>/dev/null; then :
+
+else
+  as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
+fi
+if test "${agent_max_tool_calls}" -ge 1 2>/dev/null; then :
+
+else
+  as_fn_error $? "Agent budgets must be positive integers" "$LINENO" 5
+fi
+
 
 # Check whether --with-agent-thinking was given.
 if test "${with_agent_thinking+set}" = set; then :
