@@ -1,7 +1,9 @@
 # Agent Evaluation Clean-Room Design
 
-Status: accepted for implementation  
-Design baseline: current branch `agent-eval-v2` at `edd2d15`  
+Status: implemented; unit, real-Agent, isolation, timeout, and reporting gates passed
+
+Implementation branch: `agent-eval-v2`
+
 Companion implementation plan: [`../plans/agent-generator-protocol-v1.md`](../plans/agent-generator-protocol-v1.md)
 
 ## 1. Source boundary
@@ -16,9 +18,9 @@ current branch:
 - `scripts/sv-iv-analyze` reads generation/test logs and writes canonical
   correctness summaries.
 
-The existing `agent_eval/` implementation and existing Agent documentation are
-not design inputs. They are legacy code to replace after the new implementation
-passes its contract and integration tests.
+The retired pre-clean-room Agent implementation and its documentation were not
+design inputs. They were removed only after the new implementation passed its
+contract, real-Agent, isolation, timeout, and reporting integration gates.
 
 ## 2. Accepted architectural decision
 
@@ -415,7 +417,7 @@ The Agent producer writes one manifest per sample:
   "producer": {
     "kind": "agent",
     "agent": "opencode",
-    "profile": "opencode-basic-v1",
+    "profile": "opencode-artifact-thinking-v1",
     "model": "qwen3.6-coder"
   },
   "execution": {
@@ -433,15 +435,16 @@ The Agent producer writes one manifest per sample:
     "output_tokens": 1800,
     "turns": 4,
     "tool_calls": 7,
-    "usage_source": "agent_events"
+    "usage_source": "trajectory"
   }
 }
 ```
 
 Canonical `summary.txt` and `summary.csv` remain correctness-only outputs.
-A separate Agent report joins them with manifests to report submission rate,
-timeout/error rate, conditional correctness, turns, tool calls, duration, and
-cost per successful task.
+`scripts/sv-agent-analyze` joins them with manifests into
+`agent-summary.json`/`agent-summary.txt`. Correctness, execution, and submission
+remain separate. The report includes conditional correctness, turns, tool
+calls, duration, and nullable token usage; unknown usage remains null.
 
 ## 10. Acceptance gates
 

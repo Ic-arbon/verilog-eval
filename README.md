@@ -79,55 +79,48 @@ use a remote vLLM or the optional LiteLLM gateway instead, override
 `OPENAI_API_BASE` and `OPENAI_API_KEY`; the defaults remain suitable when the
 evaluation runs on the vLLM host itself.
 
-### External agent evaluation
+### External Agent evaluation
 
-See the [Agent testing guide](docs/agent-evaluation.md) for the complete Chinese
-runbook, result schema, comparison checklist, and troubleshooting steps.
+See the [Agent testing guide](docs/agent-evaluation.md) for the architecture,
+runbook, result schema, and verification gates.
 
-The agent harness can evaluate Pi and OpenCode against the same local model.
+Pi and OpenCode implement the same generator program protocol as the model
+producer. GNU Make remains the sole benchmark scheduler and the existing
+Icarus/`sv-iv-analyze` path remains the sole correctness authority. An Agent's
+only formal submission is `/workspace/TopModule.sv`; code printed in chat is
+never extracted.
+
 Start with one problem:
 
 ```sh
-./scripts/agent-eval \
-  --agent all \
-  --with-task=spec-to-rtl \
-  --problems Prob001_zero
+printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
+VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
 ```
 
-Run one agent or the full dataset with:
+Select Pi by changing `--with-agent=pi`. The Nix app installs pinned Agent tools,
+loads the pinned Docker image, checks the local vLLM endpoint, configures a
+separate `build/agent-nix-eval-*` directory, and executes Make. Its Agent
+defaults are one sample, `qwen3.6-coder`, an 8192-token per-call limit,
+300-second wall timeout, temperature 0.6, top-p 0.95, and Qwen thinking enabled.
+Append configure options after `--` to override them.
+
+Each sample receives a fresh Docker container with only its public workspace and
+a read-only Agent-tools mount. Dataset directories, hidden references and
+testbenches, prior summaries, the repository, and the Docker socket are absent.
+The container has a read-only root, a non-root identity, dropped capabilities,
+resource limits, and forced timeout cleanup.
+
+Every Agent run writes the canonical `summary.csv`/`summary.txt`, structured
+per-sample sidecars, and joined `agent-summary.json`/`agent-summary.txt` files.
+The joined report keeps Verilog correctness, process status, and submission
+status separate; unavailable token usage remains null.
+
+Run the adversarial infrastructure checks before a larger evaluation:
 
 ```sh
-./scripts/agent-eval --agent pi
-./scripts/agent-eval --agent opencode
+tests/integration/agent-docker-isolation-smoke
+tests/integration/agent-docker-timeout-smoke
 ```
-
-The first run installs pinned Pi and OpenCode versions into `.agent-tools`.
-Each trajectory runs in an isolated task workspace; reference solutions and
-hidden testbenches are not visible to the agent. The default `--sandbox auto`
-uses Bubblewrap when unprivileged user namespaces work and otherwise falls back
-to a read-only, capability-free Docker container. Use `--sandbox bwrap` or
-`--sandbox docker` to require one backend. The Agent backend replaces only
-Make's `GENERATE_VERILOG` command: it maps the public benchmark prompt into an
-isolated workspace and maps the resulting `TopModule.sv` back to the standard
-sample path. The original Makefile, iverilog rules, hidden tests, and
-`sv-iv-analyze` remain the only grading path. Commands, raw JSONL trajectories,
-Agent sidecars, generation logs, and canonical summaries are written under
-`runs/agent-eval-*`.
-
-Generation settings accept the same configure-style names as model-only runs:
-`--with-task`, `--with-model`, `--with-problems`, `--with-samples`,
-`--with-max-tokens`, `--with-temperature`, and `--with-top-p`. The older
-`--task` and `--model` spellings remain compatible. Agent Pass@1 requires
-`--with-samples=1`; `--with-problems` names a problem-list file, while
-`--problems` remains a convenience for passing problem IDs directly.
-
-Defaults are 16 parallel trajectories and a 180-second timeout per problem.
-Override them with `--jobs` and `--timeout`. At least one supported sandbox
-backend must be available before any trajectory starts. The wrapper creates
-`.cache` under the repository and redirects Nix, npm, XDG, and agent caches
-there before Nix starts. Set `VERILOG_EVAL_CACHE_ROOT=/opt/path` to choose
-another `/opt` location. Direct `nix run .#agent-eval -- ...` remains available,
-but Nix's pre-launch cache then follows the caller's existing environment.
 
 To verify the core tools:
 

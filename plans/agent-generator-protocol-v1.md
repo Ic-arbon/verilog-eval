@@ -3,6 +3,10 @@
 Objective: add clean-room Agent evaluation to the current branch while keeping
 the existing model producer and Icarus correctness path authoritative.
 
+Status: Steps 1–7 implemented. Fake, OpenCode, Pi, hidden-file isolation,
+forced-timeout, and joined-report integration gates passed before retirement of
+the pre-clean-room runtime.
+
 Design specification: [`../docs/agent-generator-protocol-v1.md`](../docs/agent-generator-protocol-v1.md)
 
 ## Fixed invariants
@@ -12,7 +16,7 @@ Design specification: [`../docs/agent-generator-protocol-v1.md`](../docs/agent-g
   converted into a candidate.
 - `*_ref.sv` and `*_test.sv` are never staged or mounted for the Agent.
 - `configure` plus GNU Make remains the only benchmark orchestrator.
-- Existing `agent_eval/` code is not imported, copied, or adapted.
+- The retired pre-clean-room code was not imported, copied, or adapted.
 - Canonical correctness continues through the current Icarus and
   `scripts/sv-iv-analyze` path.
 
@@ -72,7 +76,7 @@ python3 -m coverage report --fail-under=80
 ### Exit criteria
 
 All contract/publication tests pass with at least 80% line coverage. No module
-imports anything from `agent_eval`.
+imports anything from the retired runtime.
 
 ### Rollback
 

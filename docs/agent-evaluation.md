@@ -1,280 +1,330 @@
 # Agent 评测指南
 
-## 1. 核心边界
+## 1. 唯一评测路径
 
-Agent 只替换 VerilogEval 的代码生成命令：
-
-```text
-公开 benchmark 输入
-  → Agent generator backend
-  → 标准 sample.sv + generation log
-  → 原版 Makefile / iverilog / hidden tests / sv-iv-analyze
-```
-
-架构图：[`agent-eval-generator-architecture.excalidraw`](agent-eval-generator-architecture.excalidraw)
-
-Agent generator 实现与 `scripts/sv-generate` 相同的关键合同：
+Agent 只替换单个 sample 的生成程序，不替换调度器或 grader：
 
 ```text
-输入：task、prompt 文件、model/sampling 参数、output 路径
-输出：完整 Verilog candidate、generation log
+configure
+  → GNU Make
+  → scripts/sv-agent-generate
+  → 每题独立 Docker workspace
+  → /workspace/TopModule.sv
+  → canonical *_sampleNN.sv
+  → 原始 Icarus hidden tests
+  → scripts/sv-iv-analyze
+  → summary.csv / summary.txt
+  → scripts/sv-agent-analyze
+  → agent-summary.json / agent-summary.txt
 ```
 
-Adapter 不进行提示词优化，不教工具序列化格式，不抽取聊天代码，不重试缺失提交，也不参与正确性评分。
+关键不变量：
 
-## 2. 两种任务输入
+- `configure` 加 GNU Make 是唯一问题/sample 调度器。
+- Model 与 Agent 共享进程/文件层面的 Generator Program Protocol，不共享
+  Python backend 基类。
+- `/workspace/TopModule.sv` 是唯一正式 Agent 提交。
+- 聊天文本、Markdown代码块和stdout永远不会被提取为candidate。
+- Icarus、隐藏测试和`sv-iv-analyze`是唯一正确性权威。
+- Agent运行状态、提交状态和Verilog正确性分别记录。
+- 正式Pass@1不向Agent反馈隐藏grader结果，也不因grader失败重试。
 
-### `spec-to-rtl`
+详细设计见
+[`agent-generator-protocol-v1.md`](agent-generator-protocol-v1.md)。
 
-Agent 工作区包含：
+## 2. 单题起步
+
+要求：
+
+- x86_64 Linux与Nix；
+- 可用的Docker daemon；
+- `http://127.0.0.1:58000/v1`上的`qwen3.6-coder`；
+- `/opt/llm/api-key.env`中的可选`VLLM_API_KEY`，或显式
+  `OPENAI_API_KEY`。
+
+OpenCode单题：
+
+```bash
+cd /opt/agent/verilog-eval
+printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
+VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+```
+
+Pi单题：
+
+```bash
+VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=pi --with-problems=/tmp/agent-smoke.txt
+```
+
+命令建议保持单行；若拆行，每一行结尾必须保留反斜杠。否则后续
+`--with-*`会被shell当作新命令。
+
+Nix app会：
+
+1. 安装固定版本Pi和OpenCode到`.agent-tools`；
+2. 加载固定的Docker镜像archive；
+3. 检查vLLM health endpoint；
+4. 创建参数哈希对应的`build/agent-nix-eval-*`；
+5. 调用`configure`；
+6. `exec make`。
+
+需要强制创建全新实验根目录时：
+
+```bash
+VERILOG_EVAL_BUILD_ROOT="$PWD/build/my-fresh-run" \
+VERILOG_EVAL_JOBS=1 \
+nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+```
+
+## 3. 配置参数
+
+Nix Agent app默认值：
+
+| 参数 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--with-generator` | `agent` | 选择Agent producer |
+| `--with-agent` | `opencode` | `opencode`或`pi` |
+| `--with-model` | `qwen3.6-coder` | 真实endpoint模型ID |
+| `--with-task` | `spec-to-rtl` | 也支持`code-complete-iccad2023` |
+| `--with-samples` | `1` | 正式Pass@1配置 |
+| `--with-examples` | `0` | Agent当前只支持零shot staging |
+| `--with-max-tokens` | `8192` | 每次模型调用输出上限 |
+| `--with-temperature` | `0.6` | OpenCode采样参数 |
+| `--with-top-p` | `0.95` | OpenCode采样参数 |
+| `--with-agent-timeout` | `300` | 每个外部Agent进程的硬wall timeout |
+| `--with-agent-max-turns` | `20` | Agent回合预算；OpenCode映射为steps |
+| `--with-agent-max-tool-calls` | `50` | Agent工具调用预算参数 |
+| `--with-agent-thinking` | `on` | Qwen request-level thinking开关 |
+| `--with-agent-tool-profile` | `base` | `base`或`rtl`镜像 |
+
+`--with-agent-thinking=off`只允许Qwen模型。OpenCode通过模型配置中的
+`chat_template_kwargs.enable_thinking`控制；Pi使用其Qwen thinking兼容格式。
+不修改正在运行的vLLM部署。
+
+并发由宿主环境控制：
+
+```bash
+export VERILOG_EVAL_JOBS=8
+```
+
+每个Make generation目标仍对应一个独立Agent container。
+
+## 4. 公开workspace与正式提交
+
+`spec-to-rtl`初始workspace：
 
 ```text
-TASK.md       # 原始 *_prompt.txt
+/workspace/
+├── TASK.md
+├── RULES.md          # 仅显式启用时
+└── .agent-config/
 ```
 
-Agent 必须创建：
+`code-complete-iccad2023`还会包含公开starter：
 
 ```text
-TopModule.sv
+/workspace/TopModule.sv
 ```
 
-### `code-complete-iccad2023`
-
-Agent 工作区包含：
-
-```text
-TASK.md       # 原始 *_prompt.txt
-TopModule.sv  # 使用公开 *_ifc.txt 初始化
-```
-
-Agent 必须完成并修改 `TopModule.sv`。未修改的 starter 视为 `missing_submission`。
-
-两种任务都不会向 Agent 暴露：
+不会进入workspace或任何container mount的内容：
 
 ```text
 *_ref.sv
 *_test.sv
+dataset目录
+build目录
+ prior summary/trajectory
+宿主repository
+Docker socket
+无关宿主环境变量或secret
 ```
 
-## 3. Generator 与 Backend 职责
+Agent结束后只检查`/workspace/TopModule.sv`。发布器拒绝：
 
-`agent_eval/generate.py` 负责一次 Make generation request：
+- 缺失文件；
+- symlink；
+- 非regular file；
+- 空文件；
+- 超过大小上限的文件；
+- 未修改的code-completion starter。
 
-1. 创建该 sample 的隔离工作区；
-2. 放入公开 prompt/starter；
-3. 调用 `agent_eval/backend.py` 生成 Pi 或 OpenCode CLI 命令；
-4. 在 Bubblewrap 或 Docker 中执行 Agent；
-5. 将 `TopModule.sv` 发布到 Make 指定的 sample 路径；
-6. 删除单题临时 workspace，包括 npm cache、OpenCode数据库和工具临时输出；
-7. 完成 token、turn、tool、状态和轨迹 sidecar。
+无有效artifact时会发布确定性无效占位文件，使Make可以保留完整分母。
+它不会从聊天中恢复代码。
 
-`agent_eval/backend.py` 是薄转换层，只处理 Pi/OpenCode 命令行差异。
+## 5. 外部Agent Driver
 
-OpenCode 使用专用 `benchmark` primary Agent，只开放 read/edit/bash权限，并将 workspace 文件定义为正式 deliverable。该 profile 不包含工具序列化语法或 Verilog 解题提示。默认 profile 为 `opencode-artifact-v4`；加载 inline-skill Digital Chip Design Agents Harness 并保留自然路由时为 `opencode-dcda-inline-v1`；显式选择 `chip-rtl` primary时为 `opencode-dcda-chip-rtl-v1`；关闭Qwen thinking时分别使用独立的 `*-no-thinking-v1` profile；Pi 为 `pi-standard-v3`。每个 workspace 只包含当前 Agent 的配置。`agent.json` 和 generation log 会记录 `adapter_profile`，避免把不同 Adapter/Harness 结果混合。
-
-如果 Agent 没有产生有效 artifact，generator 会写入明确的失败占位样本，让完整 Make 批次继续，并保留真实状态：
+Driver只负责写外部CLI配置、构造argv和解析机器事件：
 
 ```text
-missing_submission
-agent_error
-timeout
+agent_generation/drivers/pi.py
+agent_generation/drivers/opencode.py
 ```
 
-正式 Pass@1 不自动重试。
-
-## 4. 运行
-
-推荐使用包装脚本，使 Nix、npm、XDG 和 Agent 缓存保留在仓库 `.cache`：
-
-```bash
-cd /opt/agent/verilog-eval
-./scripts/agent-eval \
-  --agent opencode \
-  --with-task=spec-to-rtl \
-  --with-model=qwen3.6-coder \
-  --with-samples=1 \
-  --with-max-tokens=8192 \
-  --with-temperature=0.6 \
-  --with-top-p=0.95 \
-  --jobs 48 \
-  --timeout 180
-```
-
-Pi：
-
-```bash
-./scripts/agent-eval \
-  --agent pi \
-  --with-task=spec-to-rtl \
-  --jobs 48
-```
-
-全部题目是默认行为。单题或小批量：
-
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --with-task=spec-to-rtl \
-  --problems Prob001_zero Prob002_m2014_q4i \
-  --jobs 2
-```
-
-使用与 model-only 相同的问题列表文件：
-
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --with-task=spec-to-rtl \
-  --with-problems=/path/to/problems.txt \
-  --jobs 48
-```
-
-使用本地构建的 Agent tools prefix：
-
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --agent-tools=/opt/agent-tools-local/opencode \
-  --agent-source=/opt/src/opencode \
-  --problems Prob001_zero \
-  --run-root=runs/opencode-local-smoke
-```
-
-`--agent-tools` 目录必须包含 `node_modules/.bin/<agent>`，且内部 symlink 不得逃逸该目录。Runner 会先将完整 tools prefix 复制到 run 目录并校验 content digest；后续所有 sample 只读挂载该冻结快照。`--agent-source` 只用于记录 Git commit、dirty patch、untracked archive 和 lockfile digest，不会挂载进 Agent 容器。本地覆盖一次只能运行一个明确的 `--agent`。
-
-加载 inline-skill OpenCode Harness：
-
-```bash
-./scripts/agent-eval \
-  --agent opencode \
-  --opencode-harness=/opt/agent/digital-chip-design-agents \
-  --toolchain=minimal-rtl \
-  --problems Prob001_zero \
-  --timeout 300 \
-  --run-root=runs/opencode-dcda-smoke
-```
-
-Runner 只复制该 Git工作树中 tracked 和非 ignored 的 untracked文件，拒绝逃逸 Harness 根目录的 symlink，并将冻结快照只读挂载到 `/opencode-harness`。Harness `opencode.json` 中的全部 `chip-*` Agent 会被加载；其 skills 已内联在 Agent prompt 中，因此 `skill` tool 继续禁用。`benchmark` 只能通过 `task` 调用 `chip-*`，不能调用其他 subagent。自然路由使用 `opencode-dcda-inline-v1`；显式 `--opencode-primary-agent=chip-rtl` 使用独立的 `opencode-dcda-chip-rtl-v1`。`--opencode-thinking=off` 再使用对应的 `*-no-thinking-v1` profile。OpenCode CLI的 `--thinking` 只控制reasoning事件显示，不会关闭模型thinking，因此仍保留它用于诊断；真正开关由request-level `chat_template_kwargs.enable_thinking` 控制。不同profile结果不能合并。
-
-仓库提供公开复杂题集 `problem-sets/spec-to-rtl-complex-5.txt`，用于匹配的自然路由/显式RTL入口A/B测试。选题只基于公开 prompt，包含 ConwayLife、gshare、PS/2数据FSM、Lemmings4和FancyTimer。
-
-## 5. 参数
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `--agent` | `all` | `pi`、`opencode` 或依次运行两者 |
-| `--with-task` | `spec-to-rtl` | benchmark task |
-| `--with-model` | `qwen3.6-coder` | 本地模型 ID |
-| `--with-samples` | `1` | 当前正式 Agent 评测固定为 Pass@1 |
-| `--with-max-tokens` | `8192` | 每次模型响应上限 |
-| `--with-temperature` | `0.6` | OpenCode 请求参数与运行元数据 |
-| `--with-top-p` | `0.95` | OpenCode 请求参数与运行元数据 |
-| `--jobs` | 最多 16 | 原版 Make 并发生成/评分任务数 |
-| `--timeout` | `180` | 单个外部 Agent CLI 的秒数上限 |
-| `--sandbox` | `auto` | `auto`、`bwrap` 或 `docker` |
-| `--agent-tools` | 内置固定版本 | 本地构建的 Agent tools prefix |
-| `--agent-source` | 未设置 | 与本地 tools 对应的 Git 源码目录 |
-| `--opencode-harness` | 未设置 | inline-skill OpenCode Harness Git工作树 |
-| `--opencode-primary-agent` | `benchmark` | `benchmark`自然路由或显式 `chip-rtl` |
-| `--opencode-thinking` | `on` | 通过 vLLM `chat_template_kwargs.enable_thinking` 控制Qwen thinking |
-| `--toolchain` | `base` | `base` 或 `minimal-rtl` Agent沙箱工具集 |
-| `--run-root` | 自动时间戳 | 结果根目录 |
-| `--dry-run` | 关闭 | 只写 configure/make 命令，不执行 |
-
-旧写法 `--task`、`--model`、`--max-tokens`、`--temperature` 和 `--top-p` 仍是兼容别名。
-
-Pi 0.82.1 没有公开 temperature/top-p CLI 参数，因此 Pi 使用 vLLM 服务端采样默认值。运行 Pi 时应让命令元数据与 vLLM `--override-generation-config` 一致。
-
-## 6. 输出
+当前固定工具版本：
 
 ```text
-runs/agent-eval-<UTC>/
-└── <agent>/
-    ├── commands.json
-    ├── agent-source.json       # 使用本地 tools 时
-    ├── agent-source.patch      # 本地源码有 tracked 修改时
-    ├── agent-tools-snapshot/      # 冻结的本地构建产物
-    ├── opencode-harness.json      # Harness commit/digest/Agent清单
-    ├── opencode-harness-snapshot/ # 冻结的 Harness工作树
-    ├── configure.log
-    ├── make.log
-    ├── summary.csv
-    ├── summary.txt
-    ├── verilog-eval/
-    │   ├── summary.csv
-    │   ├── summary.txt
-    │   └── <problem>/
-    │       ├── <problem>_sample01.sv
-    │       ├── <problem>_sample01-sv-generate.log
-    │       └── <problem>_sample01-sv-iv-test.log
-    └── <problem>/
-        └── sample01/
-            ├── agent.json
-            ├── command.json
-            ├── trajectory.jsonl
-            └── stderr.log
+Pi       0.82.1
+OpenCode 1.18.7
 ```
 
-每次运行还会在根目录写入 `toolchain.json`。`minimal-rtl` profile 在生成第一题前验证以下命令全部存在，否则立即停止：
+当前profile：
 
 ```text
-iverilog verilator yosys abc sby slang surelog sv2v
+pi-artifact-thinking-v2
+pi-artifact-no-thinking-v2
+opencode-artifact-thinking-v1
+opencode-artifact-no-thinking-v1
 ```
 
-正确性只读取原版：
+Pi v2系统提示明确要求调用`write`或`edit`创建artifact；它仍不允许将聊天
+代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。API key只以
+显式允许的环境变量传入container，不写入配置、manifest或命令行。
+
+## 6. Docker隔离
+
+每个sample只挂载：
 
 ```text
-<agent>/summary.csv
-<agent>/summary.txt
+/workspace   # 当前sample，可写
+/agent-tools # 固定Agent tools，只读
 ```
 
-Agent 行为读取：
+Docker策略：
 
 ```text
-<agent>/<problem>/sample01/agent.json
-<agent>/<problem>/sample01/trajectory.jsonl
-```
-
-`timeout` 时如果已经写出 `TopModule.sv`，candidate 仍会进入原版评分，同时 `agent.json` 保留 `status=timeout`。
-
-单题 workspace 使用 `ephemeral-v1` 保留策略。正式 candidate 已发布且根轨迹已写出后，整个 workspace 都会删除，避免每题持久化约150MB npm cache；随后 `agent.json` 记录 `workspace=null` 和 `workspace_policy=ephemeral-v1`。需要长期保存的诊断必须显式写入 sample sidecar目录，不能依赖 OpenCode数据库或其他运行时缓存。
-
-生成汇总统计：
-
-```bash
-./scripts/agent-eval-stats runs/agent-eval-<UTC>
-./scripts/agent-eval-stats --json runs/agent-eval-<UTC> > stats.json
-```
-
-## 7. 隔离
-
-Agent 沙箱只挂载该 sample 的 `/workspace` 和只读 Agent 工具目录。隐藏数据集不挂载。Docker 使用：
-
-```text
-read-only root
+read-only root filesystem
 non-root UID/GID
-cap-drop ALL
+cap-drop=ALL
 no-new-privileges
 PID limit
+memory limit
+/tmp tmpfs with noexec,nosuid,nodev
 no Docker socket
+unique container name and cidfile
 ```
 
-每次运行开始时都会重新加载 Nix 生成的固定镜像 archive，并把解析后的 Docker image ID 写入 `agent.json`。`base` 保持原有轻量镜像；`minimal-rtl` 使用独立镜像，增加 Verilator、Yosys、ABC、SymbiYosys、Slang、Surelog 和 sv2v。若宿主进程 UID 为 0，容器会映射到 `65534:65534`，单题 workspace 在启动前转移给该用户。每个容器使用独立 `container.cid`；Agent timeout 后 generator 会执行 `docker rm --force`，防止遗留容器继续占用 vLLM。
+宿主以root运行时，workspace在启动前转交给`65534:65534`。超过wall
+ timeout后，executor执行`docker rm --force`并在返回前确认清理成功。
 
-Bubblewrap 只挂载选定 Nix store closure、动态加载器、Agent 工具和当前工作区。若宿主禁止 unprivileged user namespaces，`--sandbox auto` 会在启动任何 generation request 前回退到 Docker。
+## 7. 输出
 
-## 8. 旧结果
-
-重构前通过独立 runner 生成、再用 `--with-pregen` 导回的运行应标记为：
+每个配置位于独立build目录：
 
 ```text
-harness-v1 / protocol-prompted
+build/agent-nix-eval-<hash>/
+├── summary.csv
+├── summary.txt
+├── agent-summary.json
+├── agent-summary.txt
+└── <problem>/
+    ├── <problem>_sample01.sv
+    ├── <problem>_sample01-sv-generate.log
+    ├── <problem>_sample01-sv-iv-test.log
+    ├── <problem>_sample01-generation.json
+    ├── <problem>_sample01-trajectory.jsonl
+    └── <problem>_sample01-stderr.log
 ```
 
-新 Generator ABI 运行应标记为：
+`*-generation.json`使用`agent-generation/v1`，分别包含：
 
 ```text
-harness-v2 / neutral-generator-backend
+producer
+execution.status / exit_code / duration_seconds
+submission.status / sha256 / size_bytes
+usage.input_tokens / output_tokens / turns / tool_calls / usage_source
 ```
 
-两种结果不能混在同一个实验配置中。
+典型正交组合：
+
+```text
+execution=completed submission=published correctness=pass
+execution=completed submission=missing   correctness=fail
+execution=timeout   submission=published correctness=pass-or-fail
+execution=error     submission=missing   correctness=fail
+```
+
+`agent-summary.json`使用`agent-evaluation/v1`，分别汇总：
+
+```text
+correctness
+execution
+submission
+usage
+samples[]
+```
+
+有任何sample缺少token usage时，汇总`value`为`null`，同时保留
+`known_sum`、`known_samples`和`unknown_samples`。不会把unknown伪造成0。
+`summary.txt`中的`total_cost`是上游分析器要求的兼容数字栏；Agent遥测应以
+manifest和`agent-summary.json`为准。
+
+## 8. 正式验证门
+
+本地单元与Nix检查：
+
+```bash
+python3 -m unittest discover -s tests -v
+nix flake check --all-systems --no-build "path:$PWD"
+```
+
+真实Docker隐藏数据哨兵：
+
+```bash
+tests/integration/agent-docker-isolation-smoke
+```
+
+该测试使用假Agent主动搜索隐藏grader文件、宿主repo、Docker socket和未授权
+环境变量。它不调用模型。
+
+真实Docker超时清理：
+
+```bash
+tests/integration/agent-docker-timeout-smoke
+```
+
+该测试先写candidate再故意sleep，要求最终同时满足：
+
+```text
+execution.status=timeout
+execution.exit_code=124
+submission.status=published
+Icarus pass
+无残留container
+```
+
+以上两项通过后，再分别运行一个真实OpenCode和Pi单题smoke。完成这些门之前
+不要启动完整156题评测。
+
+## 9. 结果解释
+
+- temperature 0.6加单样本具有随机性；单次agent或profile差异不是稳定质量证据。
+- Pass@1允许Agent内部多轮及工具调用，但不允许隐藏grader反馈或grader后重试。
+- `Error 2 (ignored)`是原Make规则保留完整分母的行为，应读取最终summary与
+  manifest确认原因。
+- build hash由配置参数决定。要排除旧artifact复用，使用新的
+  `VERILOG_EVAL_BUILD_ROOT`。
+- 生成正确代码但只打印到聊天时，结果必须是`submission=missing`。
+
+## 10. 常见诊断
+
+查看单题manifest：
+
+```bash
+manifest=$(find build -name '*-generation.json' -print -quit)
+python3 -m json.tool "$manifest"
+```
+
+检查残留container：
+
+```bash
+docker ps -a --format '{{.Names}}' | grep '^verilog-eval-' || echo 'no leftovers'
+```
+
+检查最终Agent报告：
+
+```bash
+python3 -m json.tool build/agent-nix-eval-*/agent-summary.json
+```
+
+所有正式run应保留canonical summaries、candidate、generation manifest、轨迹、
+stderr和Agent汇总报告。
