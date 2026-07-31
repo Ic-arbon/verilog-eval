@@ -2,12 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from agent_generation.cli import AgentGeneratorConfig, run_agent_generation
+from agent_generation.cli import AgentGeneratorConfig, main, run_agent_generation
 from agent_generation.contracts import AgentEnvironment, AgentUsage, ProcessResult
 
 
@@ -44,10 +45,18 @@ class FakeExecutor:
         self.candidate = candidate
         self.specs = []
         self.workspace_paths = []
+        self.workspace_snapshots = []
 
     def run(self, spec):
         self.specs.append(spec)
         self.workspace_paths.append(spec.workspace)
+        self.workspace_snapshots.append(
+            {
+                path.name: path.read_text()
+                for path in spec.workspace.iterdir()
+                if path.is_file()
+            }
+        )
         if self.candidate is not None:
             (spec.workspace / "TopModule.sv").write_text(self.candidate)
         return self.result
@@ -68,6 +77,54 @@ def completed_result(stdout="trajectory\n", stderr=""):
             usage_source="fake_events",
         ),
     )
+
+
+class AgentGeneratorCliTests(unittest.TestCase):
+    def test_script_is_executable_generator_program(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "sv-agent-generate"
+
+        self.assertTrue(script.is_file())
+        self.assertTrue(os.access(script, os.X_OK))
+
+    def test_cli_runs_one_sample_with_injected_runtime_and_public_rules(self):
+        candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prompt = root / "Prob001_zero_prompt.txt"
+            output = root / "build" / "Prob001_zero_sample01.sv"
+            prompt.write_text("Produce a constant-zero TopModule.\n")
+            driver = FakeDriver()
+            executor = FakeExecutor(completed_result(), candidate=candidate)
+            argv = [
+                "--agent=pi",
+                "--model=qwen3.6-coder",
+                "--task=spec-to-rtl",
+                "--examples=0",
+                "--rules",
+                "--max-tokens=8192",
+                "--temperature=0.6",
+                "--top-p=0.95",
+                "--agent-thinking=off",
+                "--agent-timeout=30",
+                "--agent-max-turns=10",
+                "--agent-max-tool-calls=20",
+                f"--work-root={root / 'runtime'}",
+                f"--output={output}",
+                str(prompt),
+            ]
+
+            with redirect_stdout(io.StringIO()):
+                exit_code = main(argv, driver=driver, executor=executor)
+
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(output.read_text(), candidate)
+            self.assertIn("TASK.md", executor.workspace_snapshots[0])
+            self.assertIn("RULES.md", executor.workspace_snapshots[0])
+            self.assertIn(
+                "synchronous reset",
+                executor.workspace_snapshots[0]["RULES.md"],
+            )
+            self.assertNotIn("TopModule.sv", executor.workspace_snapshots[0])
 
 
 class AgentGeneratorVerticalSliceTests(unittest.TestCase):
