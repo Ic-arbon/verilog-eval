@@ -42,7 +42,7 @@ class TimeoutRunner:
                 output="partial trajectory\n",
                 stderr="deadline\n",
             )
-        self.removed_before_return = command[1:3] == ["rm", "--force"]
+        self.removed_before_return = tuple(command[1:3]) == ("rm", "--force")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
