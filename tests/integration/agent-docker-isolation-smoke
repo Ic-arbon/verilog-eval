@@ -23,8 +23,9 @@ before_containers="$scratch/containers-before.txt"
 after_containers="$scratch/containers-after.txt"
 
 cleanup() {
-  rm -f "$sentinel"
-  rm -rf "$scratch"
+  rm -f "$sentinel" || true
+  chmod -R u+w "$scratch" 2>/dev/null || true
+  rm -rf "$scratch" || true
 }
 trap cleanup EXIT INT TERM
 
