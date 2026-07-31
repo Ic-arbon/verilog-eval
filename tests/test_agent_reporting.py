@@ -51,6 +51,15 @@ def write_manifest(
                     "sha256": "a" * 64 if submission_status == "published" else None,
                     "size_bytes": 64 if submission_status == "published" else None,
                 },
+                "runtime": {
+                    "source_revision": "1" * 40,
+                    "source_diff_sha256": "2" * 64,
+                    "docker_image": "verilog-eval-agent-sandbox:v1",
+                    "docker_image_id": "sha256:" + "3" * 64,
+                    "agent_tools_versions": "pi=0.82.1 opencode=1.18.7",
+                    "agent_tools_lock_sha256": "4" * 64,
+                    "api_base_url": "http://127.0.0.1:58000/v1",
+                },
                 "usage": {
                     "input_tokens": input_tokens,
                     "output_tokens": output_tokens,
@@ -127,6 +136,10 @@ class AgentReportingTests(unittest.TestCase):
             self.assertEqual(report["samples"][1]["execution"]["status"], "timeout")
             self.assertFalse(report["samples"][1]["correctness"]["passed"])
             self.assertEqual(report["samples"][1]["submission"]["status"], "published")
+            self.assertEqual(
+                report["samples"][0]["runtime"]["docker_image_id"],
+                "sha256:" + "3" * 64,
+            )
 
     def test_unknown_usage_is_explicit_and_never_fabricated_as_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
