@@ -28,8 +28,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("agent-hidden-sentinel", source)
         self.assertIn("/var/run/docker.sock", source)
         self.assertIn("/opt/agent/verilog-eval", source)
-        self.assertIn('"status" == "completed"', source)
-        self.assertIn('"status" == "published"', source)
+        self.assertIn('execution_status == "completed"', source)
+        self.assertIn('submission_status == "published"', source)
 
 
 if __name__ == "__main__":
