@@ -179,6 +179,45 @@ class DockerExecutorTests(unittest.TestCase):
 
             self.assertEqual(runner.calls, [])
 
+    def test_root_host_workspace_is_transferred_to_non_root_container_user(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            runner = RecordingRunner()
+            _executor, spec, tools = self.make_fixture(root, runner=runner)
+            config_file = spec.workspace / ".agent-config" / "config.json"
+            config_file.parent.mkdir()
+            config_file.write_text("{}\n")
+            ownership_changes = []
+
+            def change_owner(path, uid, gid, *, follow_symlinks):
+                ownership_changes.append((Path(path), uid, gid, follow_symlinks))
+
+            executor = DockerExecutor(
+                docker_path="docker",
+                image="image:tag",
+                agent_tools=tools,
+                uid=0,
+                gid=0,
+                runner=runner,
+                host_environment={"VLLM_API_KEY": "secret"},
+                ownership_changer=change_owner,
+            )
+
+            result = executor.run(spec)
+
+            self.assertEqual(result.status, "completed")
+            changed_paths = {item[0] for item in ownership_changes}
+            self.assertIn(spec.workspace, changed_paths)
+            self.assertIn(config_file, changed_paths)
+            self.assertTrue(
+                all(
+                    uid == 65534 and gid == 65534 and follow_symlinks is False
+                    for _path, uid, gid, follow_symlinks in ownership_changes
+                )
+            )
+            command = runner.calls[0][0]
+            self.assertIn("--user=65534:65534", command)
+
 
 if __name__ == "__main__":
     unittest.main()
