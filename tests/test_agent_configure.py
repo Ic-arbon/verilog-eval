@@ -113,6 +113,22 @@ class AgentConfigureTests(unittest.TestCase):
                 result.stdout + result.stderr,
             )
 
+    def test_invalid_agent_budgets_are_rejected_before_make(self):
+        invalid_options = (
+            "--with-agent-timeout=0",
+            "--with-agent-max-turns=not-a-number",
+            "--with-agent-max-tool-calls=-1",
+        )
+
+        for option in invalid_options:
+            with self.subTest(option=option), tempfile.TemporaryDirectory() as tmp:
+                result, _build_dir = self.configure(Path(tmp), option)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(
+                    "Agent budgets must be positive integers",
+                    result.stdout + result.stderr,
+                )
+
 
 if __name__ == "__main__":
     unittest.main()
