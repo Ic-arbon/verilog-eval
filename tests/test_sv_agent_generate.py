@@ -113,6 +113,7 @@ class AgentGeneratorCliTests(unittest.TestCase):
                 "--agent-timeout=30",
                 "--agent-max-turns=10",
                 "--agent-max-tool-calls=20",
+                "--agent-max-input-tokens=16384",
                 f"--work-root={root / 'runtime'}",
                 f"--output={output}",
                 str(prompt),
@@ -130,6 +131,7 @@ class AgentGeneratorCliTests(unittest.TestCase):
                 executor.workspace_snapshots[0]["RULES.md"],
             )
             self.assertNotIn("TopModule.sv", executor.workspace_snapshots[0])
+            self.assertEqual(driver.requests[0].max_input_tokens, 16384)
 
 
 class AgentGeneratorVerticalSliceTests(unittest.TestCase):
@@ -147,6 +149,7 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             timeout_seconds=30,
             max_turns=10,
             max_tool_calls=20,
+            max_input_tokens=16384,
             per_call_max_tokens=8192,
             rules_text=None,
         )
@@ -204,6 +207,16 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(manifest["producer"]["profile"], "fake-artifact-v1")
             self.assertEqual(manifest["execution"]["status"], "completed")
             self.assertEqual(manifest["submission"]["status"], "published")
+            self.assertEqual(
+                manifest["limits"],
+                {
+                    "timeout_seconds": 30,
+                    "max_turns": 10,
+                    "max_tool_calls": 20,
+                    "max_input_tokens": 16384,
+                    "per_call_max_tokens": 8192,
+                },
+            )
             self.assertEqual(manifest["usage"]["input_tokens"], 120)
             self.assertEqual(manifest["runtime"]["source_revision"], "1" * 40)
             self.assertEqual(

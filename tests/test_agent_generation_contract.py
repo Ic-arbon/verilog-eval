@@ -26,6 +26,7 @@ class AgentRunRequestTests(unittest.TestCase):
             "timeout_seconds": 30,
             "max_turns": 10,
             "max_tool_calls": 20,
+            "max_input_tokens": 16384,
             "per_call_max_tokens": 8192,
         }
         values.update(overrides)
@@ -61,6 +62,7 @@ class AgentRunRequestTests(unittest.TestCase):
             "timeout_seconds": 0,
             "max_turns": 0,
             "max_tool_calls": -1,
+            "max_input_tokens": 0,
             "per_call_max_tokens": 0,
         }
 

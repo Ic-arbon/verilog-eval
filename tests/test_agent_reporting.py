@@ -46,6 +46,13 @@ def write_manifest(
                     "exit_code": 0 if execution_status == "completed" else 124,
                     "duration_seconds": float(sample_number),
                 },
+                "limits": {
+                    "timeout_seconds": 300,
+                    "max_turns": 20,
+                    "max_tool_calls": 50,
+                    "max_input_tokens": 16384,
+                    "per_call_max_tokens": 8192,
+                },
                 "submission": {
                     "status": submission_status,
                     "sha256": "a" * 64 if submission_status == "published" else None,
@@ -137,6 +144,7 @@ class AgentReportingTests(unittest.TestCase):
             self.assertEqual(report["samples"][1]["execution"]["status"], "timeout")
             self.assertFalse(report["samples"][1]["correctness"]["passed"])
             self.assertEqual(report["samples"][1]["submission"]["status"], "published")
+            self.assertEqual(report["samples"][0]["limits"]["max_input_tokens"], 16384)
             self.assertEqual(
                 report["samples"][0]["runtime"]["docker_image_id"],
                 "sha256:" + "3" * 64,

@@ -15,6 +15,7 @@ class AgentFlakeIntegrationTests(unittest.TestCase):
         self.assertIn("--with-generator=agent", agent_app)
         self.assertIn("--with-model=qwen3.6-coder", agent_app)
         self.assertIn("--with-task=spec-to-rtl", agent_app)
+        self.assertIn("--with-agent-max-input-tokens=16384", agent_app)
         self.assertIn('"$root/configure"', agent_app)
         self.assertIn("exec make", agent_app)
         self.assertNotIn("agent_eval/runner.py", agent_app)

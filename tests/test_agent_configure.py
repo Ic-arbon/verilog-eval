@@ -77,6 +77,7 @@ class AgentConfigureTests(unittest.TestCase):
                 "--with-agent-timeout=240",
                 "--with-agent-max-turns=18",
                 "--with-agent-max-tool-calls=44",
+                "--with-agent-max-input-tokens=16384",
                 "--with-agent-thinking=off",
                 "--with-agent-tool-profile=rtl",
             )
@@ -91,6 +92,7 @@ class AgentConfigureTests(unittest.TestCase):
             self.assertIn("--agent-timeout=240", variables)
             self.assertIn("--agent-max-turns=18", variables)
             self.assertIn("--agent-max-tool-calls=44", variables)
+            self.assertIn("--agent-max-input-tokens=16384", variables)
             self.assertIn("--agent-thinking=off", variables)
             self.assertIn("--agent-tool-profile=rtl", variables)
             self.assertIn("--max-tokens=1024", variables)
@@ -121,6 +123,7 @@ class AgentConfigureTests(unittest.TestCase):
             "--with-agent-timeout=0",
             "--with-agent-max-turns=not-a-number",
             "--with-agent-max-tool-calls=-1",
+            "--with-agent-max-input-tokens=0",
         )
 
         for option in invalid_options:

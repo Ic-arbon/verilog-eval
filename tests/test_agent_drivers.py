@@ -26,7 +26,8 @@ def make_request(workspace: Path) -> AgentRunRequest:
         timeout_seconds=60,
         max_turns=12,
         max_tool_calls=24,
-        per_call_max_tokens=16384,
+        max_input_tokens=16384,
+        per_call_max_tokens=8192,
     )
 
 
@@ -44,9 +45,10 @@ class PiDriverTests(unittest.TestCase):
             command = driver.build_command(request)
             environment = driver.environment(request)
 
-            self.assertEqual(len(config_paths), 1)
+            self.assertEqual(len(config_paths), 2)
             config_text = config_paths[0].read_text()
             config = json.loads(config_text)
+            settings = json.loads(config_paths[1].read_text())
             provider = config["providers"]["vllm-local"]
             model = provider["models"][0]
             self.assertEqual(provider["baseUrl"], "http://127.0.0.1:58000/v1")
@@ -57,7 +59,16 @@ class PiDriverTests(unittest.TestCase):
                 provider["compat"]["thinkingFormat"], "qwen-chat-template"
             )
             self.assertEqual(model["id"], "qwen3.6-coder")
-            self.assertEqual(model["maxTokens"], 16384)
+            self.assertEqual(model["contextWindow"], 24576)
+            self.assertEqual(model["maxTokens"], 8192)
+            self.assertEqual(
+                settings["compaction"],
+                {
+                    "enabled": True,
+                    "reserveTokens": 8192,
+                    "keepRecentTokens": 8192,
+                },
+            )
             self.assertNotIn(SECRET, config_text)
 
             self.assertEqual(command[0], "/agent-tools/node_modules/.bin/pi")
@@ -138,7 +149,9 @@ class OpenCodeDriverTests(unittest.TestCase):
             self.assertFalse(
                 model["options"]["chat_template_kwargs"]["enable_thinking"]
             )
-            self.assertEqual(model["limit"]["output"], 16384)
+            self.assertEqual(model["limit"]["context"], 24576)
+            self.assertEqual(model["limit"]["output"], 8192)
+            self.assertNotIn("input", model["limit"])
             self.assertNotIn(SECRET, config_text)
 
             self.assertEqual(
