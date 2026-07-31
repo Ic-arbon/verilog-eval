@@ -52,6 +52,7 @@ class DockerExecutor:
         gid: int,
         runner: Callable = subprocess.run,
         host_environment: Optional[Mapping[str, str]] = None,
+        ownership_changer: Callable = os.chown,
     ) -> None:
         if not docker_path or "\x00" in docker_path:
             raise ValueError("docker_path must not be empty")
@@ -63,12 +64,43 @@ class DockerExecutor:
         self.docker_path = docker_path
         self.image = image
         self.agent_tools = agent_tools
+        self.host_uid = uid
+        self.host_gid = gid
         self.uid = 65534 if uid == 0 else uid
         self.gid = 65534 if gid == 0 else gid
         self.runner = runner
+        self.ownership_changer = ownership_changer
         self.host_environment = dict(
             os.environ if host_environment is None else host_environment
         )
+
+    def _prepare_workspace_ownership(self, workspace: Path) -> None:
+        if (self.host_uid, self.host_gid) == (self.uid, self.gid):
+            return
+        if self.host_uid != 0:
+            raise DockerInfrastructureError(
+                "only a root host process can remap workspace ownership"
+            )
+
+        paths = [workspace]
+        for current_root, directory_names, file_names in os.walk(
+            workspace, followlinks=False
+        ):
+            current = Path(current_root)
+            paths.extend(current / name for name in directory_names)
+            paths.extend(current / name for name in file_names)
+        try:
+            for path in paths:
+                self.ownership_changer(
+                    path,
+                    self.uid,
+                    self.gid,
+                    follow_symlinks=False,
+                )
+        except OSError as error:
+            raise DockerInfrastructureError(
+                f"failed to transfer workspace ownership: {error}"
+            ) from error
 
     def _validate_inherited_environment(self, spec: AgentProcessSpec) -> None:
         missing = [
@@ -159,6 +191,7 @@ class DockerExecutor:
         """Run one container and guarantee timeout cleanup before returning."""
 
         self._validate_inherited_environment(spec)
+        self._prepare_workspace_ownership(spec.workspace)
         with tempfile.TemporaryDirectory(prefix="verilog-eval-container-") as tmp:
             cidfile = Path(tmp) / "container.cid"
             container_name = f"verilog-eval-{uuid.uuid4().hex}"
