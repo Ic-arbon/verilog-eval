@@ -109,9 +109,9 @@ top-p 0.95, and Qwen thinking enabled. Drivers therefore advertise a 24576-token
 total context window while the vLLM deployment remains unchanged.
 Append configure options after `--` to override them. The host streams Agent
 events and force-removes the container when Pi reaches its turn budget or either
-Agent reaches its completed-tool budget. Pi receives the same public task text both
-in `TASK.md` and inline in its initial prompt, so seeing the specification does not
-depend on a successful first `read` tool call.
+Agent reaches its completed-tool budget. Pi and OpenCode receive the same public
+task text both in `TASK.md` and inline in their identical initial prompt, so seeing
+the specification does not depend on a successful first `read` tool call.
 
 Each sample receives a fresh Docker container with only its public workspace and
 a read-only Agent-tools mount. Dataset directories, hidden references and

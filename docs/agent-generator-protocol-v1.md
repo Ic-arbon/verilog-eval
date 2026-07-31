@@ -283,10 +283,10 @@ class AgentDriver(Protocol):
     def parse_event(self, line: str) -> AgentEvent | None: ...
 ```
 
-Drivers translate only external-CLI differences. Pi also places the already-staged
-public prompt text inline in its initial request so task visibility does not depend
-on a first `read` tool call; this duplicates no hidden content. Drivers do not select
-a candidate, invoke Icarus, or retry after grading.
+Drivers translate only external-CLI differences. Pi and OpenCode both place the
+already-staged public prompt text inline using the same initial-request template, so
+task visibility does not depend on a first `read` tool call; this duplicates no hidden
+content. Drivers do not select a candidate, invoke Icarus, or retry after grading.
 
 ```python
 @dataclass(frozen=True)

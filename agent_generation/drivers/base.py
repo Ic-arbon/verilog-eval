@@ -19,6 +19,13 @@ Complete the benchmark task using the available tools.
 The only formal submission is /workspace/TopModule.sv.
 Before finishing, verify that /workspace/TopModule.sv exists.
 """
+INLINE_ARTIFACT_INSTRUCTION = """\
+Complete the following public Verilog benchmark specification using the available tools.
+You MUST invoke write or edit to create /workspace/TopModule.sv; chat text is not a
+submission. Before finishing, verify that /workspace/TopModule.sv exists.
+
+Public task specification:
+"""
 
 
 class AgentDriver(Protocol):

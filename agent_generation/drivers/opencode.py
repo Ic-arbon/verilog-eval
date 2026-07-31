@@ -15,7 +15,10 @@ from agent_generation.drivers._common import (
     workspace_environment,
     write_json,
 )
-from agent_generation.drivers.base import ARTIFACT_INSTRUCTION
+from agent_generation.drivers.base import (
+    ARTIFACT_INSTRUCTION,
+    INLINE_ARTIFACT_INSTRUCTION,
+)
 
 
 OPENCODE_BINARY = "/agent-tools/node_modules/.bin/opencode"
@@ -41,7 +44,7 @@ class OpenCodeDriver:
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"opencode-artifact-{suffix}-v2"
+        return f"opencode-inline-artifact-{suffix}-v1"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_path = request.workspace / ".agent-config" / "opencode.json"
@@ -104,6 +107,7 @@ class OpenCodeDriver:
         return (write_json(config_path, config),)
 
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
+        inline_task = INLINE_ARTIFACT_INSTRUCTION + request.prompt_text
         return (
             OPENCODE_BINARY,
             "--pure",
@@ -117,7 +121,7 @@ class OpenCodeDriver:
             f"{OPENCODE_PROVIDER}/{request.model}",
             "--agent",
             "benchmark",
-            ARTIFACT_INSTRUCTION,
+            inline_task,
         )
 
     def environment(self, request: AgentRunRequest) -> AgentEnvironment:
