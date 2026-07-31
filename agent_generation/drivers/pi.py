@@ -14,7 +14,6 @@ from agent_generation.drivers._common import (
     workspace_environment,
     write_json,
 )
-from agent_generation.drivers.base import ARTIFACT_INSTRUCTION
 
 
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
@@ -25,6 +24,13 @@ This is an artifact-only benchmark. To submit, you MUST invoke the write or edit
 and create /workspace/TopModule.sv. A shell command or code block written in chat text
 is never executed, and chat text is never a submission. Do not finish until you have
 used a tool to create the file and then verified the file exists.
+"""
+PI_INLINE_TASK_INSTRUCTION = """\
+Complete the following public Verilog benchmark specification using the available tools.
+You MUST invoke write or edit to create /workspace/TopModule.sv; chat text is not a
+submission. Before finishing, verify that /workspace/TopModule.sv exists.
+
+Public task specification:
 """
 
 
@@ -43,7 +49,7 @@ class PiDriver:
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"pi-artifact-{suffix}-v3"
+        return f"pi-inline-artifact-{suffix}-v1"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_dir = request.workspace / ".agent-config" / "pi"
@@ -96,6 +102,7 @@ class PiDriver:
 
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
         thinking_level = "high" if self.thinking_enabled else "off"
+        inline_task = PI_INLINE_TASK_INSTRUCTION + request.prompt_text
         return (
             PI_BINARY,
             "--mode",
@@ -117,7 +124,7 @@ class PiDriver:
             PI_ARTIFACT_SYSTEM_PROMPT,
             "--tools",
             "read,write,edit,bash",
-            ARTIFACT_INSTRUCTION,
+            inline_task,
         )
 
     def environment(self, request: AgentRunRequest) -> AgentEnvironment:

@@ -188,15 +188,16 @@ symlink会被拒绝。
 当前profile：
 
 ```text
-pi-artifact-thinking-v3
-pi-artifact-no-thinking-v3
+pi-inline-artifact-thinking-v1
+pi-inline-artifact-no-thinking-v1
 opencode-artifact-thinking-v2
 opencode-artifact-no-thinking-v2
 ```
 
-Pi v3系统提示明确要求调用`write`或`edit`创建artifact，并显式配置输入
-context压缩预算；它仍不允许将聊天
-代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。API key只以
+Pi会把与`TASK.md`相同的公开题目正文直接放入初始prompt，避免把“先调用
+read才能看到题目”作为成功前提。系统提示仍明确要求调用`write`或`edit`
+创建artifact，并显式配置输入context压缩预算；它不允许将聊天代码转换为
+提交。所有命令均以argv执行，不经过宿主shell插值。API key只以
 显式允许的环境变量传入container，不写入配置、manifest或命令行。
 
 ## 6. Docker隔离

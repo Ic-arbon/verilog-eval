@@ -84,7 +84,7 @@ class PiDriverTests(unittest.TestCase):
             system_prompt = command[command.index("--append-system-prompt") + 1]
             self.assertIn("MUST invoke the write or edit tool", system_prompt)
             self.assertIn("chat text is never a submission", system_prompt)
-            self.assertTrue(command[-1].startswith(ARTIFACT_INSTRUCTION))
+            self.assertNotIn("Read /workspace/TASK.md", command[-1])
             self.assertIn("Public task specification:", command[-1])
             self.assertIn(request.prompt_text, command[-1])
             self.assertEqual(command[command.index("--thinking") + 1], "high")
