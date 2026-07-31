@@ -37,6 +37,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn('submission_status == "published"', source)
         self.assertIn('report_path = manifest_path.parents[1] / "agent-summary.json"', source)
         self.assertIn('{"completed": 1}', source)
+        self.assertIn('runtime = manifest["runtime"]', source)
+        self.assertIn('runtime["docker_image_id"].startswith("sha256:")', source)
 
     def test_timeout_smoke_keeps_execution_and_submission_orthogonal(self):
         self.assertTrue(TIMEOUT_SMOKE_SCRIPT.is_file())
@@ -53,6 +55,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn('chmod -R u+w "$scratch"', source)
         self.assertIn('report_path = manifest_path.parents[1] / "agent-summary.json"', source)
         self.assertIn('{"timeout": 1}', source)
+        self.assertIn('runtime = manifest["runtime"]', source)
+        self.assertIn('runtime["docker_image_id"].startswith("sha256:")', source)
 
 
 if __name__ == "__main__":
