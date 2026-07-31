@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -8,6 +10,8 @@ from pathlib import Path
 from agent_generation.report import ReportError, build_agent_report, write_agent_report
 
 
+ROOT = Path(__file__).resolve().parents[1]
+REPORT_SCRIPT = ROOT / "scripts" / "sv-agent-analyze"
 SCHEMA_VERSION = "agent-generation/v1"
 
 
@@ -153,6 +157,33 @@ class AgentReportingTests(unittest.TestCase):
             self.assertIn("Execution: completed=1 error=1 timeout=1", text)
             self.assertIn("Submission: missing=1 published=2", text)
             self.assertIn("Input tokens: unavailable", text)
+
+    def test_report_cli_writes_both_outputs(self):
+        self.assertTrue(REPORT_SCRIPT.is_file())
+        self.assertTrue(os.access(REPORT_SCRIPT, os.X_OK))
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            summary = self.make_mixed_run(root)
+            json_path = root / "out.json"
+            text_path = root / "out.txt"
+
+            result = subprocess.run(
+                (
+                    str(REPORT_SCRIPT),
+                    f"--summary-csv={summary}",
+                    f"--output-json={json_path}",
+                    f"--output-text={text_path}",
+                ),
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads(json_path.read_text())["correctness"]["passed"], 1
+            )
+            self.assertIn("Verilog Pass@1", text_path.read_text())
 
     def test_missing_or_inconsistent_manifest_fails_closed(self):
         with tempfile.TemporaryDirectory() as tmp:

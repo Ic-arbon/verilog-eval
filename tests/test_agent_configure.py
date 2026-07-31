@@ -99,6 +99,9 @@ class AgentConfigureTests(unittest.TestCase):
             self.assertIn("_sample%-generation.json", makefile)
             self.assertIn("_sample%-trajectory.jsonl", makefile)
             self.assertIn("_sample%-stderr.log", makefile)
+            self.assertIn("$(scripts_dir)/sv-agent-analyze", makefile)
+            self.assertIn("--output-json=agent-summary.json", makefile)
+            self.assertIn("--output-text=agent-summary.txt", makefile)
 
     def test_invalid_generator_is_rejected_during_configure(self):
         with tempfile.TemporaryDirectory() as tmp:
