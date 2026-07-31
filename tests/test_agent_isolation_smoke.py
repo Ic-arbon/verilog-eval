@@ -35,6 +35,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("/opt/agent/verilog-eval", source)
         self.assertIn('execution_status == "completed"', source)
         self.assertIn('submission_status == "published"', source)
+        self.assertIn('report_path = manifest_path.parents[1] / "agent-summary.json"', source)
+        self.assertIn('{"completed": 1}', source)
 
     def test_timeout_smoke_keeps_execution_and_submission_orthogonal(self):
         self.assertTrue(TIMEOUT_SMOKE_SCRIPT.is_file())
@@ -49,6 +51,8 @@ class AgentDockerIsolationSmokeContractTests(unittest.TestCase):
         self.assertIn("exit_code == 124", source)
         self.assertIn("no new Agent containers remain", source)
         self.assertIn('chmod -R u+w "$scratch"', source)
+        self.assertIn('report_path = manifest_path.parents[1] / "agent-summary.json"', source)
+        self.assertIn('{"timeout": 1}', source)
 
 
 if __name__ == "__main__":
