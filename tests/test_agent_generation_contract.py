@@ -50,6 +50,11 @@ class AgentRunRequestTests(unittest.TestCase):
         with self.assertRaises(FrozenInstanceError):
             request.model = "other-model"
 
+    def test_request_rejects_sample_ids_that_can_change_paths(self):
+        for sample_id in ("../secret", "nested/sample", "", ".", ".."):
+            with self.subTest(sample_id=sample_id), self.assertRaises(ValueError):
+                self.make_request(sample_id=sample_id)
+
     def test_request_rejects_invalid_task_and_non_positive_budgets(self):
         invalid_values = {
             "task": "unknown-task",
