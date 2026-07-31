@@ -138,7 +138,8 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             config = self.make_config(root)
             executor = FakeExecutor(completed_result(stdout=chat_code))
 
-            result = run_agent_generation(config, FakeDriver(), executor)
+            with redirect_stdout(io.StringIO()):
+                result = run_agent_generation(config, FakeDriver(), executor)
 
             self.assertEqual(result.process.status, "completed")
             self.assertEqual(result.submission.status, "missing")

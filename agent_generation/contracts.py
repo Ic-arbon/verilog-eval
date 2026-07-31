@@ -106,6 +106,20 @@ class ProcessResult:
 
 
 @dataclass(frozen=True)
+class AgentProcessSpec:
+    """Command and public workspace passed to an isolated executor."""
+
+    command: tuple[str, ...]
+    workspace: Path
+    timeout_seconds: int
+
+    def __post_init__(self) -> None:
+        if not self.command or any(not argument for argument in self.command):
+            raise ValueError("command must contain non-empty arguments")
+        _require_positive("timeout_seconds", self.timeout_seconds)
+
+
+@dataclass(frozen=True)
 class SubmissionResult:
     """Result of publishing a workspace artifact to the Make output path."""
 
@@ -113,3 +127,11 @@ class SubmissionResult:
     output_path: Path
     sha256: Optional[str]
     size_bytes: Optional[int]
+
+
+@dataclass(frozen=True)
+class AgentGenerationResult:
+    """Orthogonal process and formal-submission outcomes for one sample."""
+
+    process: ProcessResult
+    submission: SubmissionResult
