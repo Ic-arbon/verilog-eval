@@ -20,6 +20,12 @@ from agent_generation.drivers.base import ARTIFACT_INSTRUCTION
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
 PI_PROVIDER = "vllm-local"
 PI_CONFIG_DIR = "/workspace/.agent-config/pi"
+PI_ARTIFACT_SYSTEM_PROMPT = """\
+This is an artifact-only benchmark. To submit, you MUST invoke the write or edit tool
+and create /workspace/TopModule.sv. A shell command or code block written in chat text
+is never executed, and chat text is never a submission. Do not finish until you have
+used a tool to create the file and then verified the file exists.
+"""
 
 
 @dataclass(frozen=True)
@@ -40,7 +46,7 @@ class PiDriver:
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"pi-artifact-{suffix}-v1"
+        return f"pi-artifact-{suffix}-v2"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_path = request.workspace / ".agent-config" / "pi" / "models.json"
@@ -97,6 +103,8 @@ class PiDriver:
             request.model,
             "--thinking",
             thinking_level,
+            "--append-system-prompt",
+            PI_ARTIFACT_SYSTEM_PROMPT,
             "--tools",
             "read,write,edit,bash",
             ARTIFACT_INSTRUCTION,
