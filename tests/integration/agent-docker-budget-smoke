@@ -39,6 +39,8 @@ module TopModule(output zero);
   assign zero = 1'b0;
 endmodule
 VERILOG
+cumulative="$(printf 'repeated-output-%.0s' {1..2000})"
+printf '{"type":"message_update","message":{"role":"assistant","content":[{"type":"text","text":"%s"}]},"assistantMessageEvent":{"type":"text_delta","contentIndex":0,"delta":"next","partial":{"role":"assistant","content":[{"type":"text","text":"%s"}]}}}\n' "$cumulative" "$cumulative"
 for turn in 1 2; do
   printf '{"type":"tool_execution_start","toolName":"write"}\n'
   printf '{"type":"tool_execution_end","toolName":"write","isError":false}\n'
@@ -103,6 +105,20 @@ assert manifest["limits"]["max_turns"] == 2, manifest
 assert manifest["limits"]["max_input_tokens"] == 16384, manifest
 assert manifest["usage"]["turns"] == 2, manifest
 assert manifest["execution"]["duration_seconds"] < 15, manifest
+
+trajectory_path = manifest_path.with_name(
+    manifest_path.name.removesuffix("-generation.json") + "-trajectory.jsonl"
+)
+trajectory_events = [
+    json.loads(line) for line in trajectory_path.read_text().splitlines()
+]
+message_update = next(
+    event for event in trajectory_events if event.get("type") == "message_update"
+)
+assert "message" not in message_update, message_update
+assert "partial" not in message_update["assistantMessageEvent"], message_update
+assert message_update["assistantMessageEvent"]["delta"] == "next", message_update
+assert trajectory_path.stat().st_size < 2048, trajectory_path.stat().st_size
 
 sample_path = manifest_path.with_name(
     manifest_path.name.removesuffix("-generation.json") + ".sv"
