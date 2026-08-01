@@ -22,7 +22,12 @@ if git -C "$root" ls-files | grep -E '(^|/)(http-capture|raw-http|real-request-c
 fi
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-request-smoke.XXXXXX")"
 server_pid=""
-cleanup(){ [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true; rm -rf "$scratch"; }
+build_roots=()
+cleanup(){
+  [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true
+  ((${#build_roots[@]} == 0)) || rm -rf "${build_roots[@]}"
+  rm -rf "$scratch"
+}
 trap cleanup EXIT INT TERM
 printf 'Prob001_zero\n' >"$scratch/problems.txt"
 export OPENAI_API_KEY="request-smoke-key"
@@ -46,7 +51,9 @@ run_case(){
   server_pid=$!
   for _ in {1..100}; do [[ -s "$base" ]] && break; sleep 0.05; done
   [[ -s "$base" ]] || { echo "request server failed to start" >&2; return 1; }
-  VERILOG_EVAL_BUILD_ROOT="$scratch/build-$label" \
+  build_root="$root/build/agent-request-smoke-$label-$$"
+  build_roots+=("$build_root")
+  VERILOG_EVAL_BUILD_ROOT="$build_root" \
     nix run "path:$root#agent-eval" -- \
       --with-agent="$agent" \
       --with-openai-api-base="$(cat "$base")" \
