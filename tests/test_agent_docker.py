@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from agent_generation.contracts import AgentEnvironment, AgentProcessSpec
@@ -147,6 +148,21 @@ class DockerExecutorTests(unittest.TestCase):
                         ).exists()
                     )
 
+    def test_buffered_execution_normalizes_trajectory_before_returning(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = RecordingRunner(stdout="large cumulative event\ncomplete event\n")
+            executor, spec, _tools = self.make_fixture(Path(tmp), runner=runner)
+            spec = replace(
+                spec,
+                trajectory_normalizer=lambda line: (
+                    "compact event\n" if "cumulative" in line else line
+                ),
+            )
+
+            result = executor.run(spec)
+
+            self.assertEqual(result.stdout, "compact event\ncomplete event\n")
+
     def test_timeout_force_removes_container_before_returning(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = TimeoutRunner()
@@ -194,6 +210,7 @@ class DockerExecutorTests(unittest.TestCase):
                 event_classifier=lambda line: (
                     "turn" if '"type":"turn_end"' in line else None
                 ),
+                trajectory_normalizer=lambda _line: '{"type":"compact"}\n',
             )
 
             started = time.monotonic()
@@ -203,7 +220,7 @@ class DockerExecutorTests(unittest.TestCase):
             self.assertEqual(result.status, "error")
             self.assertEqual(result.exit_code, 125)
             self.assertEqual(result.termination_reason, "max_turns")
-            self.assertEqual(result.stdout.count("turn_end"), 2)
+            self.assertEqual(result.stdout, '{"type":"compact"}\n' * 2)
 
     def test_missing_inherited_secret_fails_before_docker_starts(self):
         with tempfile.TemporaryDirectory() as tmp:

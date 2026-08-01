@@ -51,6 +51,9 @@ class FakeDriver:
     def classify_budget_event(self, line):
         return "turn" if line == "turn" else None
 
+    def normalize_trajectory_line(self, line):
+        return line
+
 
 class FakeExecutor:
     def __init__(self, result, candidate=None):
@@ -213,6 +216,10 @@ class AgentGeneratorVerticalSliceTests(unittest.TestCase):
             self.assertEqual(executor.specs[0].max_turns, 10)
             self.assertEqual(executor.specs[0].max_tool_calls, 20)
             self.assertEqual(executor.specs[0].event_classifier("turn"), "turn")
+            self.assertEqual(
+                executor.specs[0].trajectory_normalizer("trajectory\n"),
+                "trajectory\n",
+            )
             self.assertEqual(
                 executor.specs[0].environment.variables,
                 (("HOME", "/workspace/.home"),),

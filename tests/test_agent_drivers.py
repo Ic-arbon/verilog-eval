@@ -104,6 +104,56 @@ class PiDriverTests(unittest.TestCase):
             )
             self.assertEqual(environment.inherit, ("VLLM_API_KEY",))
 
+    def test_pi_compacts_cumulative_updates_without_losing_incremental_content(self):
+        driver = PiDriver(base_url="http://127.0.0.1:58000/v1")
+        cumulative_text = "previous output " * 10_000
+        raw_event = json.dumps(
+            {
+                "type": "message_update",
+                "message": {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": cumulative_text}],
+                },
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "contentIndex": 1,
+                    "delta": "next token",
+                    "partial": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": cumulative_text}],
+                    },
+                },
+            }
+        ) + "\n"
+
+        normalized = driver.normalize_trajectory_line(raw_event)
+        event = json.loads(normalized)
+
+        self.assertEqual(
+            event,
+            {
+                "type": "message_update",
+                "assistantMessageEvent": {
+                    "type": "text_delta",
+                    "contentIndex": 1,
+                    "delta": "next token",
+                },
+            },
+        )
+        self.assertLess(len(normalized), len(raw_event) // 100)
+
+    def test_pi_preserves_complete_and_non_json_trajectory_lines(self):
+        driver = PiDriver(base_url="http://127.0.0.1:58000/v1")
+        lines = (
+            '{"type":"message_end","message":{"usage":{"input":1}}}\n',
+            "plain diagnostic\n",
+        )
+
+        self.assertEqual(
+            tuple(driver.normalize_trajectory_line(line) for line in lines),
+            lines,
+        )
+
     def test_pi_can_disable_request_thinking_without_changing_submission_contract(self):
         with tempfile.TemporaryDirectory() as tmp:
             request = make_request(Path(tmp))
