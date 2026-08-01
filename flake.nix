@@ -355,7 +355,7 @@
             --with-agent-tool-profile=base
             --with-samples=1
             --with-examples=0
-            --with-max-tokens=8192
+            --with-max-tokens=16384
             --with-temperature=0.6
             --with-top-p=0.95
             "$@"

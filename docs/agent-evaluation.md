@@ -92,7 +92,7 @@ Nix Agent app默认值：
 | `--with-samples` | `1` | 正式Pass@1配置 |
 | `--with-examples` | `0` | Agent当前只支持零shot staging |
 | `--with-agent-max-input-tokens` | `16384` | 每次请求可用输入上下文预算 |
-| `--with-max-tokens` | `8192` | 每次模型调用输出上限 |
+| `--with-max-tokens` | `16384` | 每次模型调用输出上限 |
 | `--with-temperature` | `0.6` | OpenCode采样参数 |
 | `--with-top-p` | `0.95` | OpenCode采样参数 |
 | `--with-agent-timeout` | `300` | 每个外部Agent进程的硬wall timeout |
@@ -104,8 +104,8 @@ Nix Agent app默认值：
 `--with-agent-thinking=off`只允许Qwen模型。OpenCode通过模型配置中的
 `chat_template_kwargs.enable_thinking`控制；Pi使用其Qwen thinking兼容格式。
 不修改正在运行的vLLM部署。Driver把输入预算与输出上限相加，因此默认向
-Agent声明`24576`总context；OpenCode在约`16384`输入处压缩，Pi使用显式
-`reserveTokens=8192`和`keepRecentTokens=8192`实现相同阈值。
+Agent声明`32768`总context；OpenCode在约`16384`输入处压缩，Pi使用显式
+`reserveTokens=16384`和`keepRecentTokens=8192`实现相同阈值。
 
 并发由宿主环境控制：
 

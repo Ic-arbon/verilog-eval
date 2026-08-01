@@ -172,7 +172,7 @@ def _argument_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--examples", type=int, default=0)
     parser.add_argument("--rules", action="store_true")
-    parser.add_argument("--max-tokens", type=int, default=8192)
+    parser.add_argument("--max-tokens", type=int, default=16384)
     parser.add_argument("--temperature", type=float, default=0.6)
     parser.add_argument("--top-p", type=float, default=0.95)
     parser.add_argument(
