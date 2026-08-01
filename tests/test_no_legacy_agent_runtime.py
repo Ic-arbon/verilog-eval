@@ -11,6 +11,7 @@ class NoLegacyAgentRuntimeTests(unittest.TestCase):
             ROOT / "agent_eval",
             ROOT / "scripts" / "agent-eval",
             ROOT / "scripts" / "agent-eval-stats",
+            ROOT / "scripts" / "sv-agent-analyze",
         )
         for path in legacy_paths:
             with self.subTest(path=path):

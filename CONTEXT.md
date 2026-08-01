@@ -11,6 +11,9 @@ This repository has one benchmark scheduler: GNU Make.
 - **Tools Projection** — a private minimal read-only tree copied from the explicit Agent-tools prefix according to its lock file. Only this projection is mounted at `/agent-tools`.
 - **Sample Bundle** — canonical candidate, normalized trajectory, scrubbed stderr, and manifest. Candidate publication is its linearization point after durable sidecars.
 - **Canonical Candidate** — the only Make-visible sample output. It is either bytes read from `/workspace/TopModule.sv` or the frozen invalid Verilog placeholder; chat and stdout are never candidate sources.
+- **Report Pair** — human-readable text committed and synced before a canonical JSON completion marker that binds the Run Configuration, canonical Icarus summary, and text bytes.
+- **Recovery Receipt** — durable acknowledgement state for a nonce-bearing new run. It closes the crash gap between immutable config publication and delivery of the run path.
+- **Infrastructure Failure** — a control-plane, identity, filesystem, broker, container, transaction, or evidence failure. It publishes neither an accepted Sample Bundle for the affected sample nor a completed report for the run.
 
 ## Authorities and boundaries
 

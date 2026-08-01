@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,8 +11,6 @@ from agent_generation.sample_result import commit_sample_bundle
 from tests.test_agent_sample_result import limits, runtime
 
 
-ROOT = Path(__file__).resolve().parents[1]
-REPORT_SCRIPT = ROOT / "scripts/sv-agent-analyze"
 DIGEST = "a" * 64
 
 

@@ -81,57 +81,66 @@ evaluation runs on the vLLM host itself.
 
 ### External Agent evaluation
 
-See the [Agent testing guide](docs/agent-evaluation.md) for the architecture,
-runbook, result schema, and verification gates.
+See the [Agent testing guide](docs/agent-evaluation.md) and normative
+[generator interface](docs/agent-generator-interface.md).
 
-Pi and OpenCode implement the same generator program protocol as the model
-producer. GNU Make remains the sole benchmark scheduler and the existing
-Icarus/`sv-iv-analyze` path remains the sole correctness authority. An Agent's
-only formal submission is `/workspace/TopModule.sv`; code printed in chat is
-never extracted.
+Pi and OpenCode use the same producer-neutral generator seam as the model path.
+GNU Make remains the only sample scheduler, and the unchanged
+Icarus/`sv-iv-analyze` path remains the correctness authority. The only formal
+submission is the host-inspected `/workspace/TopModule.sv`; chat and stdout are
+never recovered as code.
 
-Start with one problem:
+Start with one problem and an explicit pinned tools prefix:
 
 ```sh
 printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
-AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+run_path_file="$(mktemp)"
+chmod 0600 "$run_path_file"
+
+export AGENT_EVAL_AGENT_TOOLS=/absolute/path/to/agent-tools
+export OPENAI_API_KEY='...'
+export VERILOG_EVAL_JOBS=1
+
+nix run .#agent-eval -- \
+  --with-agent=opencode \
+  --with-problems=/tmp/agent-smoke.txt \
+  --with-agent-max-input-tokens=16384 \
+  --with-max-tokens=16384 \
+  --with-agent-thinking=on \
+  --run-path-file="$run_path_file"
+
+scripts/validate-agent-run --expected-samples=1 "$(cat "$run_path_file")"
 ```
 
-Select Pi by changing `--with-agent=pi`. Agent tools are never installed
-implicitly: `AGENT_EVAL_AGENT_TOOLS` must name an explicit prefix containing
-`node_modules/.bin/<selected-agent>`. This can be an official npm installation
-or a locally built, source-modified version. The Nix app validates the selected
-binary and records a deterministic digest of the complete prefix before loading
-the Docker image, configuring `build/agent-nix-eval-*`, and executing Make. Its
-Agent defaults are one sample, `qwen3.6-coder`, a 16384-token input budget,
-a 16384-token per-call output limit, a 300-second wall timeout, temperature 0.6,
-top-p 0.95, and Qwen thinking enabled. Drivers therefore advertise a 32768-token
-total context window while the vLLM deployment remains unchanged. Agent runs use
-four parallel Make jobs by default; `VERILOG_EVAL_JOBS` can explicitly override it.
-Append configure options after `--` to override them. The host streams Agent
-events and force-removes the container when Pi reaches its turn budget or either
-Agent reaches its completed-tool budget. Pi and OpenCode receive the same public
-task text both in `TASK.md` and inline in their identical initial prompt, so seeing
-the specification does not depend on a successful first `read` tool call. Pi uses
-its supported `--system-prompt` override with a minimal artifact-only instruction;
-this prevents ordinary chat or pseudo-tool markup from being mistaken for execution.
+Change the Agent to `pi` as needed. The formal app never installs or downloads
+Agent tools. It projects only the selected lock-derived production closure into
+a read-only `/agent-tools` mount. Each sample gets a fresh non-root, read-only-root
+container containing only its public workspace; repository, dataset, hidden grader
+files, previous results, Docker socket, full run config, and unrelated environment
+are absent.
 
-Each sample receives a fresh Docker container with only its public workspace and
-a read-only Agent-tools mount. Dataset directories, hidden references and
-testbenches, prior summaries, the repository, and the Docker socket are absent.
-The container has a read-only root, a non-root identity, dropped capabilities,
-resource limits, and forced timeout cleanup.
+Material config is canonical JSON addressed by its SHA-256. Machine locators are
+ephemeral, the API key is handed to samples through a private run-local broker, and
+both are removed before report publication. Agent defaults are one sample,
+`qwen3.6-coder`, 16384 input tokens, 16384 output tokens, 300 seconds, 20 turns,
+50 completed tool calls, thinking on, the standard toolset, and four Make jobs.
+Agent evaluation has no sampling controls.
 
-Every Agent run writes the canonical `summary.csv`/`summary.txt`, structured
-per-sample sidecars, and joined `agent-summary.json`/`agent-summary.txt` files.
-The joined report keeps Verilog correctness, process status, and submission
-status separate; unavailable token usage remains null.
+Each Sample Bundle commits scrubbed trajectory, stderr, canonical manifest, and
+candidate last. The final Python report joins these hash-valid bundles with canonical
+Icarus rows and commits text first and JSON last. Execution, submission, correctness,
+and nullable usage remain separate.
 
-Run the adversarial infrastructure checks before a larger evaluation:
+Run the adversarial Linux gates before a larger evaluation:
 
 ```sh
+tests/integration/model-generator-regression
+tests/integration/nix-agent-launcher-smoke
+tests/integration/agent-image-isolation-smoke
 tests/integration/agent-docker-isolation-smoke
 tests/integration/agent-docker-timeout-smoke
+tests/integration/agent-docker-budget-smoke
+tests/integration/agent-openai-request-smoke
 ```
 
 To verify the core tools:

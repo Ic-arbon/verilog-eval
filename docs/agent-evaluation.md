@@ -1,365 +1,182 @@
-# Agent 评测指南
+# Agent Evaluation
 
-## 1. 唯一评测路径
-
-Agent 只替换单个 sample 的生成程序，不替换调度器或 grader：
+Agent evaluation keeps benchmark scheduling and correctness unchanged while replacing the
+sample producer with Pi or OpenCode.
 
 ```text
-configure
-  → GNU Make
-  → scripts/sv-agent-generate
-  → 每题独立 Docker workspace
-  → /workspace/TopModule.sv
-  → canonical *_sampleNN.sv
-  → 原始 Icarus hidden tests
-  → scripts/sv-iv-analyze
-  → summary.csv / summary.txt
-  → scripts/sv-agent-analyze
-  → agent-summary.json / agent-summary.txt
+Nix binding adapter
+  → agent_generation.run
+  → canonical content-addressed run
+  → configure generic generator seam
+  → GNU Make (only scheduler)
+  → sv-invoke-generator → sv-agent-generate
+  → fresh Docker workspace
+  → candidate-last Sample Bundle
+  → original Icarus grading
+  → hash-bound Agent report
 ```
 
-关键不变量：
+The normative interface and trust-boundary details are in
+[`agent-generator-interface.md`](agent-generator-interface.md).
 
-- `configure` 加 GNU Make 是唯一问题/sample 调度器。
-- Model 与 Agent 共享进程/文件层面的 Generator Program Protocol，不共享
-  Python backend 基类。
-- `/workspace/TopModule.sv` 是唯一正式 Agent 提交。
-- 聊天文本、Markdown代码块和stdout永远不会被提取为candidate。
-- Icarus、隐藏测试和`sv-iv-analyze`是唯一正确性权威。
-- Agent运行状态、提交状态和Verilog正确性分别记录。
-- 正式Pass@1不向Agent反馈隐藏grader结果，也不因grader失败重试。
+## Prerequisites
 
-详细设计见
-[`agent-generator-protocol-v1.md`](agent-generator-protocol-v1.md)。
+- clean tracked Git worktree;
+- Linux with Docker and Nix;
+- OpenAI-compatible endpoint advertising the exact model at `<base>/models`;
+- explicit external npm-lock-backed tools prefix containing pinned Pi and OpenCode;
+- API credential in an explicitly named environment variable.
 
-## 2. 单题起步
-
-要求：
-
-- x86_64 Linux与Nix；
-- 可用的Docker daemon；
-- `http://127.0.0.1:58000/v1`上的`qwen3.6-coder`；
-- `/opt/llm/api-key.env`中的可选`VLLM_API_KEY`，或显式
-  `OPENAI_API_KEY`；
-- 显式`AGENT_EVAL_AGENT_TOOLS`前缀，其中包含
-  `node_modules/.bin/<selected-agent>`。
-
-OpenCode单题：
+The setup helper is intentionally outside the formal app:
 
 ```bash
-cd /opt/agent/verilog-eval
+nix run .#setup -- # Python/model-only setup only
+nix run .#agent-tools-setup
+```
+
+For formal runs, provide a previously prepared tools prefix rather than invoking setup:
+
+```bash
+export AGENT_EVAL_AGENT_TOOLS=/opt/agent/verilog-eval/.agent-tools
+export OPENAI_API_KEY='...'
+```
+
+## One-sample smoke
+
+```bash
 printf 'Prob001_zero\n' >/tmp/agent-smoke.txt
-AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
+run_path_file="$(mktemp)"
+chmod 0600 "$run_path_file"
+
+VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- \
+  --with-agent=opencode \
+  --with-model=qwen3.6-coder \
+  --with-openai-api-base=http://127.0.0.1:58000/v1 \
+  --with-problems=/tmp/agent-smoke.txt \
+  --with-agent-max-input-tokens=16384 \
+  --with-max-tokens=16384 \
+  --with-agent-timeout=300 \
+  --with-agent-thinking=on \
+  --with-agent-toolset=standard \
+  --run-path-file="$run_path_file"
+
+scripts/validate-agent-run --expected-samples=1 "$(cat "$run_path_file")"
 ```
 
-Pi单题：
+Change `--with-agent=pi` to run Pi. The default material values are:
+
+| Input | Default |
+|---|---:|
+| Agent | `opencode` |
+| Model | `qwen3.6-coder` |
+| Task | `spec-to-rtl` |
+| Samples/problem | `1` |
+| Input budget | `16384` |
+| Output budget | `16384` |
+| Timeout/sample | `300` seconds |
+| Turn budget | `20` |
+| Tool-call budget | `50` |
+| Thinking | `on` |
+| Toolset | `standard` |
+| Make jobs | `VERILOG_EVAL_JOBS`, default `4` |
+
+The Agent interface intentionally has no sampling controls. Thinking, context/output
+limits, host turn/tool budgets, and toolset are material run identity.
+
+## Formal run
+
+Create an explicit problem file or use the dataset default. A 156-sample run at concurrency
+16 is:
 
 ```bash
-AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" VERILOG_EVAL_JOBS=1 nix run .#agent-eval -- --with-agent=pi --with-problems=/tmp/agent-smoke.txt
+run_path_file="$(mktemp)"
+chmod 0600 "$run_path_file"
+
+VERILOG_EVAL_JOBS=16 nix run .#agent-eval -- \
+  --with-agent=pi \
+  --with-model=qwen3.6-coder \
+  --with-samples=1 \
+  --with-agent-max-input-tokens=16384 \
+  --with-max-tokens=16384 \
+  --with-agent-thinking=on \
+  --with-agent-toolset=standard \
+  --run-path-file="$run_path_file"
+
+run_dir="$(cat "$run_path_file")"
+scripts/validate-agent-run --expected-samples=156 "$run_dir"
 ```
 
-命令建议保持单行；若拆行，每一行结尾必须保留反斜杠。否则后续
-`--with-*`会被shell当作新命令。
+Use the same command with `--with-agent=opencode` for the second formal run. Identical
+material config resumes the same content-addressed directory. Use `--new-run` only when an
+intentional independent repetition is required; the nonce and recovery receipt become
+part of the audit trail.
 
-Nix app会：
+## Run layout
 
-1. 要求并验证显式Agent tools前缀；
-2. 计算完整tools内容摘要，不依赖目录名或mtime；
-3. 加载固定的Docker镜像archive；
-4. 检查vLLM health endpoint；
-5. 创建包含源码、endpoint、镜像与tools摘要的参数哈希目录；
-6. 调用`configure`并`exec make`。
-
-需要强制创建全新实验根目录时：
-
-```bash
-AGENT_EVAL_AGENT_TOOLS="$PWD/.agent-tools" \
-VERILOG_EVAL_BUILD_ROOT="$PWD/build/my-fresh-run" \
-VERILOG_EVAL_JOBS=1 \
-nix run .#agent-eval -- --with-agent=opencode --with-problems=/tmp/agent-smoke.txt
-```
-
-## 3. 配置参数
-
-Nix Agent app默认值：
-
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| `--with-generator` | `agent` | 选择Agent producer |
-| `--with-agent` | `opencode` | `opencode`或`pi` |
-| `--with-model` | `qwen3.6-coder` | 真实endpoint模型ID |
-| `--with-task` | `spec-to-rtl` | 也支持`code-complete-iccad2023` |
-| `--with-samples` | `1` | 正式Pass@1配置 |
-| `--with-examples` | `0` | Agent当前只支持零shot staging |
-| `--with-agent-max-input-tokens` | `16384` | 每次请求可用输入上下文预算 |
-| `--with-max-tokens` | `16384` | 每次模型调用输出上限 |
-| `--with-temperature` | `0.6` | OpenCode采样参数 |
-| `--with-top-p` | `0.95` | OpenCode采样参数 |
-| `--with-agent-timeout` | `300` | 每个外部Agent进程的硬wall timeout |
-| `--with-agent-max-turns` | `20` | 回合硬预算；Pi由宿主事件流终止，OpenCode映射为steps |
-| `--with-agent-max-tool-calls` | `50` | 完成工具调用硬预算，由宿主事件流终止 |
-| `--with-agent-thinking` | `on` | Qwen request-level thinking开关 |
-| `--with-agent-tool-profile` | `base` | `base`或`rtl`镜像 |
-
-`--with-agent-thinking=off`只允许Qwen模型。OpenCode通过模型配置中的
-`chat_template_kwargs.enable_thinking`控制；Pi使用其Qwen thinking兼容格式。
-不修改正在运行的vLLM部署。Driver把输入预算与输出上限相加，因此默认向
-Agent声明`32768`总context；OpenCode在约`16384`输入处压缩，Pi使用显式
-`reserveTokens=16384`和`keepRecentTokens=8192`实现相同阈值。
-
-并发由宿主环境控制：
-
-```bash
-export VERILOG_EVAL_JOBS=8
-```
-
-每个Make generation目标仍对应一个独立Agent container。
-
-## 4. 公开workspace与正式提交
-
-`spec-to-rtl`初始workspace：
+A completed run is named by the SHA-256 of exact canonical `run-config.json` bytes:
 
 ```text
-/workspace/
-├── TASK.md
-├── RULES.md          # 仅显式启用时
-└── .agent-config/
-```
-
-`code-complete-iccad2023`还会包含公开starter：
-
-```text
-/workspace/TopModule.sv
-```
-
-不会进入workspace或任何container mount的内容：
-
-```text
-*_ref.sv
-*_test.sv
-dataset目录
-build目录
- prior summary/trajectory
-宿主repository
-Docker socket
-无关宿主环境变量或secret
-```
-
-Agent结束后只检查`/workspace/TopModule.sv`。发布器拒绝：
-
-- 缺失文件；
-- symlink；
-- 非regular file；
-- 空文件；
-- 超过大小上限的文件；
-- 未修改的code-completion starter。
-
-无有效artifact时会发布确定性无效占位文件，使Make可以保留完整分母。
-它不会从聊天中恢复代码。
-
-## 5. 外部Agent Driver
-
-Driver只负责写外部CLI配置、构造argv和解析机器事件：
-
-```text
-agent_generation/drivers/pi.py
-agent_generation/drivers/opencode.py
-```
-
-已验证的官方工具版本：
-
-```text
-Pi       0.82.1
-OpenCode 1.18.7
-```
-
-评测不会自动安装它们。`AGENT_EVAL_AGENT_TOOLS`可以指向官方安装，也可以
-指向改过源码后构建出的prefix。prefix必须把所选CLI放在：
-
-```text
-<tools>/node_modules/.bin/pi
-<tools>/node_modules/.bin/opencode
-```
-
-只要求本次所选Agent对应的入口存在。每次run会记录完整目录内容摘要；路径和
-mtime不影响摘要，文件内容、可执行位和symlink目标会影响摘要。逃逸prefix的
-symlink会被拒绝。
-
-当前profile：
-
-```text
-pi-minimal-system-inline-artifact-thinking-v1
-pi-minimal-system-inline-artifact-no-thinking-v1
-opencode-inline-artifact-thinking-v1
-opencode-inline-artifact-no-thinking-v1
-```
-
-Pi和OpenCode会把与`TASK.md`相同的公开题目正文放入逐字相同的初始prompt，
-避免把“先调用read才能看到题目”作为成功前提。系统提示仍明确要求调用
-`write`或`edit`创建artifact；Pi通过官方`--system-prompt`替换默认的通用
-编码提示，只保留最小artifact契约，并显式配置输入context压缩预算。两者都
-不允许将聊天代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。
-API key只以
-显式允许的环境变量传入container，不写入配置、manifest或命令行。
-
-## 6. Docker隔离
-
-每个sample只挂载：
-
-```text
-/workspace   # 当前sample，可写
-/agent-tools # 固定Agent tools，只读
-```
-
-Docker策略：
-
-```text
-read-only root filesystem
-non-root UID/GID
-cap-drop=ALL
-no-new-privileges
-PID limit
-memory limit
-/tmp tmpfs with noexec,nosuid,nodev
-no Docker socket
-unique container name and cidfile
-```
-
-宿主以root运行时，workspace在启动前转交给`65534:65534`。超过wall
- timeout后，executor执行`docker rm --force`并在返回前确认清理成功。Pi的
-`turn_end`以及两种Agent的完成工具事件由宿主实时计数；达到预算时同样强制
-删除container，分别记录`max_turns`或`max_tool_calls`终止原因。
-
-## 7. 输出
-
-每个配置位于独立build目录：
-
-```text
-build/agent-nix-eval-<hash>/
+<build-root>/<64-hex-config-digest>/
+├── run-config.json
+├── endpoint-evidence.json
+├── .generator-args
 ├── summary.csv
 ├── summary.txt
-├── agent-summary.json
 ├── agent-summary.txt
+├── agent-summary.json       # completion marker
 └── <problem>/
-    ├── <problem>_sample01.sv
-    ├── <problem>_sample01-sv-generate.log
-    ├── <problem>_sample01-sv-iv-test.log
-    ├── <problem>_sample01-generation.json
-    ├── <problem>_sample01-trajectory.jsonl
-    └── <problem>_sample01-stderr.log
+    ├── <sample>.sv           # Sample Bundle completion marker
+    ├── <sample>-generation.json
+    ├── <sample>-trajectory.jsonl
+    ├── <sample>-stderr.log
+    ├── <sample>-sv-generate.log
+    └── <sample>-sv-iv-test.log
 ```
 
-`*-trajectory.jsonl`保存归一化事件流，而不是Agent CLI的原始stdout。Pi的
-`message_update`仅保留事件类型、content index、delta、最终content和tool
-call；每次更新附带的累计`message`与`partial`快照会在读取stdout时丢弃。
-`message_end`、turn、tool、usage与termination事件保持完整。
+`runtime-bindings.json`, `.credential.sock`, temporary workspaces, and configure HOME are
+runtime-only and must be absent from a completed run. An Icarus executable may be absent
+when compilation failed; that is ordinary correctness evidence, not infrastructure failure.
 
-`*-generation.json`使用`agent-generation/v1`，分别包含：
+`agent-summary.json` reports three separate axes:
 
-```text
-producer
-execution.status / exit_code / duration_seconds / termination_reason
-limits.timeout_seconds / max_turns / max_tool_calls
-limits.max_input_tokens / per_call_max_tokens
-submission.status / sha256 / size_bytes
-usage.input_tokens / output_tokens / turns / tool_calls / usage_source
-runtime.source_revision / source_diff_sha256 / docker_image_id
-runtime.agent_tools_versions / agent_tools_lock_sha256 / agent_tools_content_sha256
-runtime.api_base_url
-```
+- execution outcome from the Agent process;
+- submission state from host-side `/workspace/TopModule.sv` inspection;
+- correctness from the original Icarus grader.
 
-典型正交组合：
+Unknown token/turn/tool usage remains `null` with `usage_source=unavailable`; aggregate
+reports retain known sums and unknown-sample counts rather than inventing zeros.
 
-```text
-execution=completed submission=published correctness=pass
-execution=completed submission=missing   correctness=fail
-execution=timeout   submission=published correctness=pass-or-fail
-execution=error     submission=missing   correctness=fail
-```
+## Resume and recovery
 
-`agent-summary.json`使用`agent-evaluation/v1`，分别汇总：
+Ordinary reruns validate current endpoint, source, image, tools, and host identities before
+resuming. Hash-valid committed samples are reused. A valid completed report returns without
+Make.
 
-```text
-correctness
-execution
-submission
-usage
-samples[]
-```
-
-有任何sample缺少token usage时，汇总`value`为`null`，同时保留
-`known_sum`、`known_samples`和`unknown_samples`。不会把unknown伪造成0。
-`summary.txt`中的`total_cost`是上游分析器要求的兼容数字栏；Agent遥测应以
-manifest和`agent-summary.json`为准。
-
-## 8. 正式验证门
-
-本地单元与Nix检查：
+For nonce runs interrupted between config publication and path acknowledgement:
 
 ```bash
-python3 -m unittest discover -s tests -v
-nix flake check --all-systems --no-build "path:$PWD"
+scripts/run-agent-evaluation --build-root "$VERILOG_EVAL_BUILD_ROOT" --list-recoveries
+scripts/run-agent-evaluation --build-root "$VERILOG_EVAL_BUILD_ROOT" \
+  --resume-recovery <digest> --run-path-file /tmp/recovered-run
+scripts/run-agent-evaluation --build-root "$VERILOG_EVAL_BUILD_ROOT" \
+  --abandon-recovery <digest>
 ```
 
-真实Docker隐藏数据哨兵：
+Abandonment quarantines the entire incomplete run; it does not delete individual sidecars.
+Suspicious evidence is likewise quarantined only under the exclusive lifecycle lock after
+live processes, containers, broker state, and run locks are ruled out.
 
-```bash
-tests/integration/agent-docker-isolation-smoke
-```
+## Failure interpretation
 
-该测试使用假Agent主动搜索隐藏grader文件、宿主repo、Docker socket和未授权
-环境变量。它不调用模型。
+- No candidate and regular sidecars: recover and regenerate the sample.
+- Candidate plus invalid/missing/hash-mismatched sidecar: infrastructure corruption;
+  quarantine the run.
+- Agent timeout/budget/process error with a committed frozen placeholder: valid sample
+  evidence; grading should fail normally.
+- Docker control failure, unsafe filesystem entry, identity mismatch, broker cleanup
+  failure, nonzero Make, or report transaction failure: no completed report.
+- Queue-inclusive timeout pressure at concurrency above endpoint capacity is a deployment
+  effect, not a protocol success.
 
-真实Docker预算终止与超时清理：
-
-```bash
-tests/integration/agent-docker-budget-smoke
-tests/integration/agent-docker-timeout-smoke
-```
-
-该测试先写candidate再故意sleep，要求最终同时满足：
-
-```text
-execution.status=timeout
-execution.exit_code=124
-submission.status=published
-Icarus pass
-无残留container
-```
-
-以上两项通过后，再分别运行一个真实OpenCode和Pi单题smoke。完成这些门之前
-不要启动完整156题评测。
-
-## 9. 结果解释
-
-- temperature 0.6加单样本具有随机性；单次agent或profile差异不是稳定质量证据。
-- Pass@1允许Agent内部多轮及工具调用，但不允许隐藏grader反馈或grader后重试。
-- `Error 2 (ignored)`是原Make规则保留完整分母的行为，应读取最终summary与
-  manifest确认原因。
-- build hash由配置参数决定。要排除旧artifact复用，使用新的
-  `VERILOG_EVAL_BUILD_ROOT`。
-- 生成正确代码但只打印到聊天时，结果必须是`submission=missing`。
-
-## 10. 常见诊断
-
-查看单题manifest：
-
-```bash
-manifest=$(find build -name '*-generation.json' -print -quit)
-python3 -m json.tool "$manifest"
-```
-
-检查残留container：
-
-```bash
-docker ps -a --format '{{.Names}}' | grep '^verilog-eval-' || echo 'no leftovers'
-```
-
-检查最终Agent报告：
-
-```bash
-python3 -m json.tool build/agent-nix-eval-*/agent-summary.json
-```
-
-所有正式run应保留canonical summaries、candidate、generation manifest、轨迹、
-stderr和Agent汇总报告。
+Do not recover Verilog from chat, stdout, trajectory, logs, or previous results. The only
+formal submission is the candidate committed from `/workspace/TopModule.sv`.
