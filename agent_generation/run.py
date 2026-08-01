@@ -1362,6 +1362,27 @@ def _remove_empty_runtime_directory(path: Path) -> None:
         os.close(directory)
 
 
+def _remove_optional_runtime_artifact(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_nlink != 1
+    ):
+        raise RunnerError(f"runtime artifact is unsafe: {path.name}")
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.unlink(path.name, dir_fd=directory)
+        os.fsync(directory)
+    except OSError as error:
+        raise RunnerError(f"cannot remove runtime artifact: {path.name}") from error
+    finally:
+        os.close(directory)
+
+
 def _remove_regular_marker(path: Path) -> None:
     try:
         metadata = path.lstat()
@@ -1445,6 +1466,7 @@ def execute_prepared_run(
 
     run_dir = prepared.config_path.parent
     with run_lock(run_dir):
+        _remove_optional_runtime_artifact(run_dir / "wave.vcd")
         existing = _complete_report(prepared)
         if existing is not None:
             return existing
@@ -1530,6 +1552,7 @@ def execute_prepared_run(
                     "runtime cleanup failed: " + "; ".join(cleanup_errors)
                 )
 
+        _remove_optional_runtime_artifact(run_dir / "wave.vcd")
         summary = run_dir / "summary.csv"
         report = build_agent_report(
             summary,
