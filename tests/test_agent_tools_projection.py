@@ -26,6 +26,7 @@ def make_tools(root: Path) -> Path:
     (shared / "package.json").write_text(
         json.dumps({"name": "shared", "version": "2.0.0"}), encoding="utf-8"
     )
+    os.link(agent / "cli.js", shared / "internal-hardlink.js")
     (unrelated / "secret-tool").write_text("not selected\n", encoding="utf-8")
     (unrelated / "package.json").write_text(
         json.dumps({"name": "unrelated", "version": "9.0.0"}), encoding="utf-8"
@@ -67,6 +68,14 @@ class ToolsProjectionTests(unittest.TestCase):
 
             self.assertTrue((projection.path / "node_modules/opencode-ai/cli.js").is_file())
             self.assertTrue((projection.path / "node_modules/shared/index.js").is_file())
+            self.assertEqual(
+                (projection.path / "node_modules/opencode-ai/cli.js").stat().st_nlink,
+                1,
+            )
+            self.assertEqual(
+                (projection.path / "node_modules/shared/internal-hardlink.js").stat().st_nlink,
+                1,
+            )
             self.assertFalse((projection.path / "node_modules/unrelated").exists())
             self.assertFalse(
                 (projection.path / "node_modules/opencode-ai/node_modules/stale-package").exists()
@@ -114,7 +123,7 @@ class ToolsProjectionTests(unittest.TestCase):
                     (source / "node_modules/opencode-ai/escape").symlink_to(root / "outside")
                 else:
                     target = source / "node_modules/opencode-ai/cli.js"
-                    os.link(target, source / "node_modules/opencode-ai/hardlink.js")
+                    os.link(target, source / "unselected-hardlink.js")
 
                 with self.assertRaises(ToolsProjectionError):
                     project_agent_tools(source, root / "projections", "opencode")

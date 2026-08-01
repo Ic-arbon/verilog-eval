@@ -189,7 +189,29 @@ def _is_within(path: Path, roots: Iterable[Path]) -> bool:
     return False
 
 
-def _copy_tree(source: Path, destination: Path, selected_roots: tuple[Path, ...]) -> None:
+def _internal_hardlinks(selected_roots: tuple[Path, ...]) -> dict[tuple[int, int], int]:
+    aliases: dict[tuple[int, int], set[Path]] = {}
+    for root in selected_roots:
+        for current, _directories, files in os.walk(root, followlinks=False):
+            for name in files:
+                path = Path(current) / name
+                metadata = path.lstat()
+                if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink <= 1:
+                    continue
+                aliases.setdefault((metadata.st_dev, metadata.st_ino), set()).add(path)
+    return {
+        identity: len(paths)
+        for identity, paths in aliases.items()
+        if len(paths) == next(iter(paths)).stat().st_nlink
+    }
+
+
+def _copy_tree(
+    source: Path,
+    destination: Path,
+    selected_roots: tuple[Path, ...],
+    internal_hardlinks: dict[tuple[int, int], int],
+) -> None:
     destination.mkdir(mode=0o700)
     try:
         entries = sorted(os.scandir(source), key=lambda entry: entry.name)
@@ -213,11 +235,19 @@ def _copy_tree(source: Path, destination: Path, selected_roots: tuple[Path, ...]
                 )
             destination_path.symlink_to(target)
         elif stat.S_ISDIR(metadata.st_mode):
-            _copy_tree(source_path, destination_path, selected_roots)
+            _copy_tree(
+                source_path,
+                destination_path,
+                selected_roots,
+                internal_hardlinks,
+            )
         elif stat.S_ISREG(metadata.st_mode):
-            if metadata.st_nlink != 1:
+            hardlink_identity = (metadata.st_dev, metadata.st_ino)
+            if metadata.st_nlink != 1 and internal_hardlinks.get(
+                hardlink_identity
+            ) != metadata.st_nlink:
                 raise ToolsProjectionError(
-                    f"selected package contains a hard-linked file: {source_path}"
+                    f"selected package hard link escapes selected closure: {source_path}"
                 )
             flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
             descriptor = os.open(source_path, flags)
@@ -225,6 +255,8 @@ def _copy_tree(source: Path, destination: Path, selected_roots: tuple[Path, ...]
                 verified = os.fstat(descriptor)
                 if not stat.S_ISREG(verified.st_mode):
                     raise ToolsProjectionError("package file changed type during copy")
+                if verified.st_nlink != metadata.st_nlink:
+                    raise ToolsProjectionError("package hard-link state changed during copy")
                 output = os.open(
                     destination_path,
                     os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -372,6 +404,7 @@ def project_agent_tools(
     temporary = destination_root / f".projection.{uuid.uuid4().hex}.tmp"
     temporary.mkdir(mode=0o700)
     versions: dict[str, str] = {}
+    internal_hardlinks = _internal_hardlinks(selected_roots)
     try:
         for package_path, source_root in zip(selected, selected_roots):
             metadata = packages[package_path]
@@ -382,7 +415,12 @@ def project_agent_tools(
             versions[package_name] = version
             destination = temporary / PurePosixPath(package_path)
             destination.parent.mkdir(parents=True, exist_ok=True)
-            _copy_tree(source_root, destination, selected_roots)
+            _copy_tree(
+                source_root,
+                destination,
+                selected_roots,
+                internal_hardlinks,
+            )
 
         package_name, _binary = _AGENT_PACKAGES[agent]
         agent_path = f"node_modules/{package_name}"
