@@ -8,7 +8,12 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from agent_generation.cli import AgentGeneratorConfig, main, run_agent_generation
+from agent_generation.cli import (
+    AgentGeneratorConfig,
+    _argument_parser,
+    main,
+    run_agent_generation,
+)
 from agent_generation.contracts import (
     AgentEnvironment,
     AgentUsage,
@@ -88,6 +93,20 @@ def completed_result(stdout="trajectory\n", stderr=""):
 
 
 class AgentGeneratorCliTests(unittest.TestCase):
+    def test_thinking_agent_defaults_to_16k_output_budget(self):
+        parser = _argument_parser()
+        args = parser.parse_args(
+            [
+                "--agent=pi",
+                "--model=qwen3.6-coder",
+                "--task=spec-to-rtl",
+                "--output=TopModule.sv",
+                "prompt.txt",
+            ]
+        )
+
+        self.assertEqual(args.max_tokens, 16384)
+
     def test_script_is_executable_generator_program(self):
         script = Path(__file__).resolve().parents[1] / "scripts" / "sv-agent-generate"
 
