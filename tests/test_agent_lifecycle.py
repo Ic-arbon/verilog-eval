@@ -9,10 +9,18 @@ from pathlib import Path
 
 from agent_generation.lifecycle import (
     LifecycleError,
+    abandon_recovery,
+    acknowledge_recovery,
     inventory_build_root,
     lifecycle_lock,
+    list_recovery_receipts,
+    publish_recovery_receipt,
     quarantine_entry,
+    run_lock,
+    synthesize_orphan_recovery_receipts,
 )
+from agent_generation.run_config import publish_run_config
+from tests.test_agent_run_config import valid_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,6 +48,20 @@ class LifecycleTests(unittest.TestCase):
             self.assertEqual(inventory["run_roots"], ["a" * 64, "b" * 64])
             self.assertEqual(inventory["receipts"], ["receipt.json"])
             self.assertIn(".lifecycle.lock", inventory["control_entries"])
+
+    def test_same_run_lock_is_nonblocking_and_nonce_roots_are_independent(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = root / ("1" * 64)
+            second = root / ("2" * 64)
+            first.mkdir()
+            second.mkdir()
+            with run_lock(first):
+                with self.assertRaises(LifecycleError):
+                    with run_lock(first):
+                        pass
+                with run_lock(second):
+                    pass
 
     def test_quarantine_renames_directory_without_recursive_delete(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -69,6 +91,60 @@ class LifecycleTests(unittest.TestCase):
                     with lifecycle_lock(root, exclusive=True):
                         quarantine_entry(root, name)
             self.assertTrue(outside.is_dir())
+
+    def test_recovery_receipt_closes_config_publication_crash_gap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = valid_config()
+            config["nonce"] = "1" * 32
+            config_path = publish_run_config(root, config)
+            digest = config_path.parent.name
+
+            created = synthesize_orphan_recovery_receipts(root)
+            self.assertEqual(len(created), 1)
+            receipts = list_recovery_receipts(root)
+            self.assertEqual(receipts[0]["config_sha256"], digest)
+            self.assertFalse(receipts[0]["acknowledged"])
+
+            acknowledge_recovery(root, digest)
+            self.assertTrue(list_recovery_receipts(root)[0]["acknowledged"])
+            self.assertEqual(synthesize_orphan_recovery_receipts(root), [])
+
+    def test_receipt_publication_is_idempotent_and_mode_0600(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = valid_config()
+            config["nonce"] = "2" * 32
+            config_path = publish_run_config(root, config)
+            digest = config_path.parent.name
+
+            first = publish_recovery_receipt(root, digest)
+            second = publish_recovery_receipt(root, digest)
+            self.assertEqual(first, second)
+            self.assertEqual(first.stat().st_mode & 0o777, 0o600)
+
+    def test_abandon_quarantines_incomplete_run_and_receipt_but_refuses_complete(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = valid_config()
+            config["nonce"] = "3" * 32
+            config_path = publish_run_config(root, config)
+            digest = config_path.parent.name
+            publish_recovery_receipt(root, digest)
+
+            destination = abandon_recovery(root, digest)
+            self.assertTrue(destination.is_dir())
+            self.assertFalse(config_path.parent.exists())
+            self.assertEqual(list_recovery_receipts(root), [])
+            self.assertTrue(any((root / "quarantine").glob(f"{digest}*.recovery.json")))
+
+            config["nonce"] = "4" * 32
+            complete_path = publish_run_config(root, config)
+            complete_digest = complete_path.parent.name
+            publish_recovery_receipt(root, complete_digest)
+            (complete_path.parent / "agent-summary.json").write_text("{}\n")
+            with self.assertRaises(LifecycleError):
+                abandon_recovery(root, complete_digest)
 
     def test_standalone_helper_self_test_and_json_inventory(self):
         self.assertTrue(SCRIPT.is_file())

@@ -1,0 +1,470 @@
+from __future__ import annotations
+
+import os
+import subprocess
+import tempfile
+import unittest
+from pathlib import Path
+
+from agent_generation.run import (
+    PreparationEvidence,
+    RunnerError,
+    assert_clean_source,
+    collect_input_manifest,
+    collect_preparation_evidence,
+    configure_environment,
+    docker_environment,
+    make_environment,
+    manage_recovery,
+    parse_runner_options,
+    prepare_run,
+    runner_environment,
+)
+from agent_generation.provenance import (
+    docker_daemon_identity,
+    executable_identity,
+    support_file_identity,
+)
+from agent_generation.run_config import publish_run_config
+from tests.test_agent_endpoint import ThreadedServer, json_handler
+from tests.test_agent_run_config import valid_config
+from tests.test_agent_tools_projection import make_tools
+
+
+class RunnerCliStateTests(unittest.TestCase):
+    def test_ordinary_defaults_and_jobs_are_resolved_material_inputs(self):
+        options = parse_runner_options(
+            ["--with-agent=pi"],
+            environment={"VERILOG_EVAL_JOBS": "16"},
+        )
+
+        self.assertEqual(options.mode, "ordinary")
+        self.assertEqual(options.agent, "pi")
+        self.assertEqual(options.model, "qwen3.6-coder")
+        self.assertEqual(options.max_input_tokens, 16384)
+        self.assertEqual(options.max_output_tokens, 16384)
+        self.assertTrue(options.thinking)
+        self.assertEqual(options.jobs, 16)
+        self.assertEqual(options.api_key_environment, "OPENAI_API_KEY")
+
+    def test_sampling_options_are_not_part_of_agent_interface(self):
+        for option in ("--with-temperature=0.6", "--with-top-p=0.95"):
+            with self.subTest(option=option), self.assertRaises(SystemExit):
+                parse_runner_options([option], environment={})
+
+    def test_new_run_and_resume_are_mutually_exclusive(self):
+        with self.assertRaises(SystemExit):
+            parse_runner_options(
+                ["--new-run", "--resume=/tmp/run-config.json"],
+                environment={},
+            )
+
+    def test_resume_loads_material_config_and_rejects_overrides(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = publish_run_config(Path(tmp), valid_config())
+
+            options = parse_runner_options(
+                [f"--resume={config_path}", "--source-root=/rebound/source"],
+                environment={"VERILOG_EVAL_JOBS": "4"},
+            )
+            self.assertEqual(options.mode, "resume")
+            self.assertEqual(options.agent, "pi")
+            self.assertEqual(options.jobs, 4)
+            self.assertEqual(options.source_root, Path("/rebound/source"))
+
+            with self.assertRaises(SystemExit):
+                parse_runner_options(
+                    [f"--resume={config_path}", "--with-model=other"],
+                    environment={},
+                )
+            with self.assertRaises(SystemExit):
+                parse_runner_options(
+                    [f"--resume={config_path}"],
+                    environment={"VERILOG_EVAL_JOBS": "8"},
+                )
+
+    def test_recovery_management_is_explicit_and_build_root_scoped(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = valid_config()
+            config["nonce"] = "5" * 32
+            config_path = publish_run_config(root, config)
+            from agent_generation.lifecycle import publish_recovery_receipt
+
+            publish_recovery_receipt(root, config_path.parent.name)
+            listed = parse_runner_options(
+                [f"--build-root={root}", "--list-recoveries"], environment={}
+            )
+            self.assertEqual(len(manage_recovery(listed)), 1)
+
+            resume = parse_runner_options(
+                [
+                    f"--build-root={root}",
+                    f"--resume-recovery={config_path.parent.name}",
+                ],
+                environment={},
+            )
+            self.assertEqual(manage_recovery(resume), config_path.resolve())
+
+    def test_invalid_jobs_fail_before_side_effects(self):
+        for value in ("0", "-1", "many", "1.5"):
+            with self.subTest(value=value), self.assertRaises(SystemExit):
+                parse_runner_options([], environment={"VERILOG_EVAL_JOBS": value})
+
+
+class SourceAndInputIdentityTests(unittest.TestCase):
+    def init_repository(self, root: Path) -> None:
+        subprocess.run(("git", "init", "-q", str(root)), check=True)
+        subprocess.run(("git", "-C", str(root), "config", "user.email", "test@example.test"), check=True)
+        subprocess.run(("git", "-C", str(root), "config", "user.name", "Test"), check=True)
+        (root / "tracked.txt").write_text("clean\n")
+        (root / ".gitignore").write_text("ignored.py\nbuild/\n")
+        subprocess.run(("git", "-C", str(root), "add", "."), check=True)
+        subprocess.run(("git", "-C", str(root), "commit", "-qm", "base"), check=True)
+
+    def test_clean_source_rejects_tracked_and_runtime_affecting_untracked_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repository(root)
+            assert_clean_source(root, allowed_roots=())
+
+            (root / "tracked.txt").write_text("dirty\n")
+            with self.assertRaises(RunnerError):
+                assert_clean_source(root, allowed_roots=())
+            subprocess.run(("git", "-C", str(root), "checkout", "--", "tracked.txt"), check=True)
+
+            (root / "shadow.py").write_text("raise RuntimeError\n")
+            with self.assertRaises(RunnerError):
+                assert_clean_source(root, allowed_roots=())
+            (root / "shadow.py").unlink()
+
+            (root / "ignored.py").write_text("raise RuntimeError\n")
+            with self.assertRaises(RunnerError):
+                assert_clean_source(root, allowed_roots=())
+
+    def test_allowlisted_build_root_does_not_influence_source_guard(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.init_repository(root)
+            build = root / "build"
+            build.mkdir()
+            (build / "generated.py").write_text("generated = True\n")
+            assert_clean_source(root, allowed_roots=(build,))
+
+    def test_input_manifest_hashes_every_selected_public_and_hidden_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dataset = root / "dataset_spec-to-rtl"
+            dataset.mkdir()
+            problems = dataset / "problems.txt"
+            problems.write_text("Prob001_zero\n")
+            (dataset / "Prob001_zero_prompt.txt").write_text("prompt\n")
+            (dataset / "Prob001_zero_test.sv").write_text("test\n")
+            (dataset / "Prob001_zero_ref.sv").write_text("ref\n")
+
+            problem_ids, manifest = collect_input_manifest(
+                source_root=root,
+                dataset_dir=dataset,
+                problems_file=problems,
+                task="spec-to-rtl",
+                rules=True,
+                examples=0,
+            )
+
+            self.assertEqual(problem_ids, ("Prob001_zero",))
+            self.assertEqual(
+                [item["kind"] for item in manifest],
+                ["problem_list", "prompt", "hidden_test", "hidden_reference", "rules"],
+            )
+            self.assertTrue(all(len(item["sha256"]) == 64 for item in manifest))
+            self.assertNotIn(str(dataset), repr(manifest))
+
+    def test_real_preparation_collects_all_identities_without_running_npm_or_make(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source"
+            source.mkdir()
+            self.init_repository(source)
+            dataset = source / "dataset_spec-to-rtl"
+            dataset.mkdir()
+            (dataset / "problems.txt").write_text("Prob001_zero\n")
+            (dataset / "Prob001_zero_prompt.txt").write_text("prompt\n")
+            (dataset / "Prob001_zero_test.sv").write_text("test\n")
+            (dataset / "Prob001_zero_ref.sv").write_text("ref\n")
+            subprocess.run(("git", "-C", str(source), "add", "."), check=True)
+            subprocess.run(("git", "-C", str(source), "commit", "-qm", "dataset"), check=True)
+
+            tools = make_tools(root)
+            bin_dir = root / "bin"
+            bin_dir.mkdir()
+            calls = root / "calls.log"
+            docker = bin_dir / "docker"
+            docker.write_text(
+                "#!/bin/sh\n"
+                f"printf '%s\\n' \"$*\" >> {calls}\n"
+                "case \"$1\" in\n"
+                "  load) exit 0 ;;\n"
+                "  image) printf 'sha256:%064d\\n' 2; exit 0 ;;\n"
+                "  version) printf '{\"ID\":\"daemon\",\"Os\":\"linux\",\"Arch\":\"amd64\"}\\n'; exit 0 ;;\n"
+                "esac\n"
+                "exit 1\n"
+            )
+            docker.chmod(0o755)
+            for name in ("bash", "make", "iverilog", "timeout"):
+                path = bin_dir / name
+                path.write_text("#!/bin/sh\nexit 0\n")
+                path.chmod(0o755)
+            image_archive = root / "image.tar"
+            image_archive.write_bytes(b"image")
+            ca_bundle = root / "ca.pem"
+            ca_bundle.write_text("ca\n")
+
+            handler = json_handler({"data": [{"id": "qwen3.6-coder"}]})
+            with ThreadedServer(handler) as base:
+                options = parse_runner_options(
+                    [
+                        "--with-agent=opencode",
+                        f"--with-openai-api-base={base}",
+                        f"--source-root={source}",
+                        f"--with-dataset={dataset}",
+                        f"--with-problems={dataset / 'problems.txt'}",
+                        f"--build-root={root / 'runs'}",
+                        f"--agent-tools={tools}",
+                        f"--docker-path={docker}",
+                        "--docker-image=verilog-eval-agent-sandbox:standard",
+                        f"--docker-archive={image_archive}",
+                    ],
+                    environment={"VERILOG_EVAL_JOBS": "4"},
+                )
+                evidence, credential = collect_preparation_evidence(
+                    options,
+                    environment={
+                        "OPENAI_API_KEY": "secret",
+                        "PATH": f"{bin_dir}:{os.environ['PATH']}",
+                        "SSL_CERT_FILE": str(ca_bundle),
+                        "VERILOG_EVAL_CACHE_ROOT": str(root / "cache"),
+                        "DOCKER_HOST": "unix:///var/run/docker.sock",
+                    },
+                )
+
+            self.assertEqual(credential, "secret")
+            self.assertEqual(evidence.problems, ("Prob001_zero",))
+            self.assertRegex(evidence.docker_daemon_identity, r"^sha256:[0-9a-f]{64}$")
+            self.assertRegex(evidence.tools_content_sha256, r"^[0-9a-f]{64}$")
+            self.assertEqual(evidence.endpoint_evidence["model"], "qwen3.6-coder")
+            command_log = calls.read_text()
+            self.assertIn("load --input", command_log)
+            self.assertIn("image inspect", command_log)
+            self.assertNotIn("npm", command_log)
+            self.assertNotIn("make ", command_log)
+
+
+class HostIdentityTests(unittest.TestCase):
+    def test_executable_and_support_identities_are_content_not_path_based(self):
+        with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:
+            first = Path(first_tmp) / "tool"
+            second = Path(second_tmp) / "tool"
+            first.write_text("same bytes\n")
+            second.write_text("same bytes\n")
+            first.chmod(0o755)
+            second.chmod(0o755)
+
+            self.assertEqual(
+                executable_identity("tool", first),
+                executable_identity("tool", second),
+            )
+            support = support_file_identity("support", first)
+            self.assertEqual(support["name"], "support")
+            self.assertEqual(support["size_bytes"], len("same bytes\n"))
+            self.assertNotIn(str(first_tmp), repr(support))
+
+    def test_docker_daemon_identity_hashes_bounded_server_record(self):
+        calls = []
+
+        def runner(command, **kwargs):
+            calls.append((command, kwargs))
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout='{"ID":"daemon","Os":"linux","Arch":"amd64"}\n',
+                stderr="",
+            )
+
+        identity = docker_daemon_identity(
+            "/pinned/docker",
+            environment={"PATH": "/pinned", "DOCKER_HOST": "unix:///socket"},
+            runner=runner,
+        )
+        self.assertRegex(identity, r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(calls[0][0][1:3], ("version", "--format"))
+        self.assertEqual(calls[0][1]["env"], {"PATH": "/pinned", "DOCKER_HOST": "unix:///socket"})
+
+
+class RunPreparationTests(unittest.TestCase):
+    def evidence(self, root: Path) -> PreparationEvidence:
+        return PreparationEvidence(
+            source_commit="1" * 40,
+            problems=("Prob001_zero",),
+            inputs=(
+                {
+                    "kind": "problem_list",
+                    "name": "problems.txt",
+                    "sha256": "a" * 64,
+                    "size_bytes": 13,
+                },
+                {
+                    "kind": "hidden_test",
+                    "name": "Prob001_zero_test.sv",
+                    "sha256": "b" * 64,
+                    "size_bytes": 42,
+                },
+            ),
+            docker_image_id="sha256:" + "2" * 64,
+            docker_daemon_identity="linux/amd64@daemon",
+            tools_content_sha256="3" * 64,
+            tools_source_content_sha256="9" * 64,
+            tools_lock_sha256="4" * 64,
+            tools_versions={"opencode-ai": "1.18.7"},
+            toolchain_identities=(
+                {"name": "python", "identity": "sha256:" + "5" * 64},
+                {"name": "make", "identity": "sha256:" + "6" * 64},
+            ),
+            support_identities=(
+                {"name": "ca-bundle", "sha256": "7" * 64, "size_bytes": 10},
+            ),
+            endpoint_evidence={"response_sha256": "8" * 64},
+            runtime_bindings={
+                "source_root": str(root / "source"),
+                "dataset_dir": str(root / "source/dataset_spec-to-rtl"),
+                "build_dir": str(root / "build"),
+                "docker": {
+                    "client": str(root / "bin/docker"),
+                    "daemon": "unix:///var/run/docker.sock",
+                    "image": "verilog-eval-agent-sandbox:standard",
+                    "archive": str(root / "image.tar"),
+                },
+                "tools_projection": str(root / "projection"),
+                "toolchain": {
+                    "bash": str(root / "bin/bash"),
+                    "make": str(root / "bin/make"),
+                    "iverilog": str(root / "bin/iverilog"),
+                    "timeout": str(root / "bin/timeout"),
+                },
+                "support_files": {"ca_bundle": str(root / "ca-bundle.crt")},
+                "credential_broker": ".credential.sock",
+            },
+        )
+
+    def options(self, root: Path, *extra: str):
+        return parse_runner_options(
+            [f"--build-root={root / 'runs'}", *extra],
+            environment={"VERILOG_EVAL_JOBS": "4"},
+        )
+
+    def test_ordinary_run_identity_is_deterministic_and_bindings_remain_ephemeral(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first = prepare_run(
+                self.options(root), self.evidence(root), credential="secret"
+            )
+            second = prepare_run(
+                self.options(root), self.evidence(root), credential="secret"
+            )
+
+            self.assertEqual(first.config_path, second.config_path)
+            self.assertEqual(first.config["jobs"], 4)
+            self.assertIsNone(first.config["nonce"])
+            self.assertEqual(first.bindings["run_config_sha256"], first.digest)
+            self.assertFalse(first.config_path.with_name("runtime-bindings.json").exists())
+
+    def test_new_run_has_nonce_and_durable_unacknowledged_receipt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            prepared = prepare_run(
+                self.options(root, "--new-run"),
+                self.evidence(root),
+                credential="secret",
+            )
+
+            self.assertRegex(prepared.config["nonce"], r"^[0-9a-f]{32}$")
+            receipt = root / "runs/.recoveries" / f"{prepared.digest}.json"
+            self.assertTrue(receipt.is_file())
+            self.assertFalse(__import__("json").loads(receipt.read_text())["acknowledged"])
+
+    def test_resume_rebinds_locators_only_when_material_identity_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            initial = prepare_run(
+                self.options(root), self.evidence(root), credential="secret"
+            )
+            resumed_options = parse_runner_options(
+                [f"--resume={initial.config_path}", "--source-root=/new/source"],
+                environment={},
+            )
+            rebound = self.evidence(root)
+            rebound.runtime_bindings["source_root"] = "/new/source"
+            resumed = prepare_run(resumed_options, rebound, credential="secret")
+            self.assertEqual(resumed.config_path, initial.config_path)
+            self.assertEqual(resumed.bindings["source_root"], "/new/source")
+
+            changed = self.evidence(root)
+            changed.tools_content_sha256 = "f" * 64
+            with self.assertRaises(RunnerError):
+                prepare_run(resumed_options, changed, credential="secret")
+
+
+class ClosedEnvironmentTests(unittest.TestCase):
+    def test_runner_environment_keeps_only_explicit_inputs_and_selected_secret(self):
+        ambient = {
+            "PATH": "/ambient/bin",
+            "HOME": "/ambient/home",
+            "OPENAI_API_KEY": "secret",
+            "OTHER_SECRET": "leak",
+            "PYTHONPATH": "/leak",
+            "HTTP_PROXY": "http://proxy",
+            "SSL_CERT_FILE": "/ca.pem",
+        }
+        result = runner_environment(
+            ambient,
+            path="/pinned/bin",
+            home="/private/home",
+            api_key_environment="OPENAI_API_KEY",
+        )
+        self.assertEqual(
+            result,
+            {
+                "PATH": "/pinned/bin",
+                "HOME": "/private/home",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "SSL_CERT_FILE": "/ca.pem",
+                "OPENAI_API_KEY": "secret",
+            },
+        )
+
+    def test_configure_make_and_docker_environments_are_separate(self):
+        toolchain = {"PATH": "/pinned/bin", "SHELL": "/pinned/bin/bash"}
+        configure = configure_environment(toolchain, home="/tmp/config-home")
+        make = make_environment(toolchain)
+        docker = docker_environment(
+            docker_host="unix:///var/run/docker.sock", path="/pinned/bin"
+        )
+
+        self.assertEqual(configure["HOME"], "/tmp/config-home")
+        self.assertNotIn("OPENAI_API_KEY", configure)
+        self.assertNotIn("MAKEFLAGS", make)
+        self.assertEqual(docker["DOCKER_HOST"], "unix:///var/run/docker.sock")
+        for environment in (configure, make, docker):
+            for forbidden in (
+                "PYTHONPATH",
+                "BASH_ENV",
+                "ENV",
+                "NODE_OPTIONS",
+                "HTTP_PROXY",
+                "DOCKER_CONFIG",
+            ):
+                self.assertNotIn(forbidden, environment)
+
+
+if __name__ == "__main__":
+    unittest.main()

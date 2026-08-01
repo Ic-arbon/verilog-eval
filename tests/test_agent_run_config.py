@@ -26,6 +26,7 @@ def valid_config() -> dict:
             "name": "pi",
             "model": "qwen3.6-coder",
             "thinking": True,
+            "toolset": "standard",
         },
         "benchmark": {
             "task": "spec-to-rtl",
@@ -65,6 +66,7 @@ def valid_config() -> dict:
             "docker_daemon_identity": "linux/amd64@daemon",
             "agent_tools": {
                 "content_sha256": DIGEST_C,
+                "source_content_sha256": DIGEST_B,
                 "lock_sha256": DIGEST_A,
                 "versions": {"opencode-ai": "1.18.7"},
             },

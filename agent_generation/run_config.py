@@ -188,9 +188,18 @@ def _validate_runtime(value: Any) -> None:
     tools = _mapping(
         runtime["agent_tools"],
         "runtime.agent_tools",
-        {"content_sha256", "lock_sha256", "versions"},
+        {
+            "content_sha256",
+            "source_content_sha256",
+            "lock_sha256",
+            "versions",
+        },
     )
     _digest(tools["content_sha256"], "runtime.agent_tools.content_sha256")
+    _digest(
+        tools["source_content_sha256"],
+        "runtime.agent_tools.source_content_sha256",
+    )
     _digest(tools["lock_sha256"], "runtime.agent_tools.lock_sha256")
     versions = tools["versions"]
     if not isinstance(versions, dict) or not versions:
@@ -259,12 +268,18 @@ def validate_run_config(
     """Validate one fully resolved, locator-free material configuration."""
 
     config = _mapping(value, "run configuration", _TOP_LEVEL_FIELDS)
-    agent = _mapping(config["agent"], "agent", {"name", "model", "thinking"})
+    agent = _mapping(
+        config["agent"],
+        "agent",
+        {"name", "model", "thinking", "toolset"},
+    )
     if agent["name"] not in _ALLOWED_AGENTS:
         raise RunConfigError("agent.name is unsupported")
     _string(agent["model"], "agent.model")
     if not isinstance(agent["thinking"], bool):
         raise RunConfigError("agent.thinking must be boolean")
+    if agent["toolset"] not in {"standard", "rtl"}:
+        raise RunConfigError("agent.toolset is unsupported")
     _validate_benchmark(config["benchmark"])
     _validate_endpoint(config["endpoint"])
 
