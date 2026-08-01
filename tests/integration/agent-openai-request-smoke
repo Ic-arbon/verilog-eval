@@ -44,6 +44,7 @@ run_case(){
     recover) expected_requests=3; server_options+=(--tool-error-first) ;;
     *) return 2 ;;
   esac
+  [[ "$agent" != opencode ]] || expected_requests=$((expected_requests + 1))
   base="$scratch/$label.base"; log="$scratch/$label.jsonl"; path="$scratch/$label.path"
   : >"$path"; chmod 0600 "$path"
   "$root/tests/integration/openai-agent-server" \
