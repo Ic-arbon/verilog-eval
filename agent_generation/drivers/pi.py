@@ -43,7 +43,7 @@ class PiDriver:
     @property
     def profile_id(self) -> str:
         suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"pi-inline-artifact-{suffix}-v1"
+        return f"pi-minimal-system-inline-artifact-{suffix}-v1"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_dir = request.workspace / ".agent-config" / "pi"
@@ -114,7 +114,7 @@ class PiDriver:
             request.model,
             "--thinking",
             thinking_level,
-            "--append-system-prompt",
+            "--system-prompt",
             PI_ARTIFACT_SYSTEM_PROMPT,
             "--tools",
             "read,write,edit,bash",

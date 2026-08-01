@@ -111,7 +111,9 @@ Append configure options after `--` to override them. The host streams Agent
 events and force-removes the container when Pi reaches its turn budget or either
 Agent reaches its completed-tool budget. Pi and OpenCode receive the same public
 task text both in `TASK.md` and inline in their identical initial prompt, so seeing
-the specification does not depend on a successful first `read` tool call.
+the specification does not depend on a successful first `read` tool call. Pi uses
+its supported `--system-prompt` override with a minimal artifact-only instruction;
+this prevents ordinary chat or pseudo-tool markup from being mistaken for execution.
 
 Each sample receives a fresh Docker container with only its public workspace and
 a read-only Agent-tools mount. Dataset directories, hidden references and

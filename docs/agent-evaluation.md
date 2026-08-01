@@ -188,16 +188,17 @@ symlink会被拒绝。
 当前profile：
 
 ```text
-pi-inline-artifact-thinking-v1
-pi-inline-artifact-no-thinking-v1
+pi-minimal-system-inline-artifact-thinking-v1
+pi-minimal-system-inline-artifact-no-thinking-v1
 opencode-inline-artifact-thinking-v1
 opencode-inline-artifact-no-thinking-v1
 ```
 
 Pi和OpenCode会把与`TASK.md`相同的公开题目正文放入逐字相同的初始prompt，
 避免把“先调用read才能看到题目”作为成功前提。系统提示仍明确要求调用
-`write`或`edit`创建artifact；Pi还显式配置输入context压缩预算。两者都不
-允许将聊天代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。
+`write`或`edit`创建artifact；Pi通过官方`--system-prompt`替换默认的通用
+编码提示，只保留最小artifact契约，并显式配置输入context压缩预算。两者都
+不允许将聊天代码转换为提交。所有命令均以argv执行，不经过宿主shell插值。
 API key只以
 显式允许的环境变量传入container，不写入配置、manifest或命令行。
 

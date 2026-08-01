@@ -425,7 +425,7 @@ The Agent producer writes one manifest per sample:
   "producer": {
     "kind": "agent",
     "agent": "opencode",
-    "profile": "opencode-artifact-thinking-v2",
+    "profile": "opencode-inline-artifact-thinking-v1",
     "model": "qwen3.6-coder"
   },
   "execution": {

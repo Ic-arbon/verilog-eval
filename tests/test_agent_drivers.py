@@ -11,7 +11,7 @@ from agent_generation.drivers.base import (
     INLINE_ARTIFACT_INSTRUCTION,
 )
 from agent_generation.drivers.opencode import OpenCodeDriver
-from agent_generation.drivers.pi import PiDriver
+from agent_generation.drivers.pi import PI_ARTIFACT_SYSTEM_PROMPT, PiDriver
 
 
 SECRET = "do-not-persist-this-api-key"
