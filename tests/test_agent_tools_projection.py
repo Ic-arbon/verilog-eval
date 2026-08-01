@@ -41,6 +41,8 @@ def make_tools(root: Path) -> Path:
             "node_modules/opencode-ai": {
                 "version": "1.18.7",
                 "dependencies": {"shared": "2.0.0"},
+                "peerDependencies": {"optional-peer": "1.0.0"},
+                "peerDependenciesMeta": {"optional-peer": {"optional": True}},
                 "bin": {"opencode": "cli.js"},
             },
             "node_modules/shared": {"version": "2.0.0"},

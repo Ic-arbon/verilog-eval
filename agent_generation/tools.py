@@ -138,19 +138,31 @@ def _selected_packages(
         if not isinstance(metadata, dict) or metadata.get("dev") is True:
             raise ToolsProjectionError("selected dependency is missing or development-only")
         selected.append(package_path)
-        dependency_names: set[str] = set()
+        dependency_requirements: dict[str, bool] = {}
+        peer_metadata = metadata.get("peerDependenciesMeta", {})
+        if not isinstance(peer_metadata, dict):
+            raise ToolsProjectionError(f"{package_path} has malformed peer metadata")
         for field in ("dependencies", "optionalDependencies", "peerDependencies"):
             dependencies = metadata.get(field, {})
             if dependencies is None:
                 continue
             if not isinstance(dependencies, dict):
                 raise ToolsProjectionError(f"{package_path} has malformed dependencies")
-            dependency_names.update(dependencies)
-        for dependency in sorted(dependency_names):
+            for dependency in dependencies:
+                peer_optional = (
+                    field == "peerDependencies"
+                    and isinstance(peer_metadata.get(dependency), dict)
+                    and peer_metadata[dependency].get("optional") is True
+                )
+                optional = field == "optionalDependencies" or peer_optional
+                dependency_requirements[dependency] = (
+                    dependency_requirements.get(dependency, True) and optional
+                )
+        for dependency, optional in sorted(dependency_requirements.items()):
             try:
                 resolved = _resolve_dependency(packages, package_path, dependency)
             except ToolsProjectionError:
-                if dependency in metadata.get("optionalDependencies", {}):
+                if optional:
                     continue
                 raise
             if resolved not in seen:
