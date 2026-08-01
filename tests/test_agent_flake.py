@@ -17,6 +17,7 @@ class AgentFlakeIntegrationTests(unittest.TestCase):
         self.assertIn("--with-task=spec-to-rtl", agent_app)
         self.assertIn("--with-agent-max-input-tokens=16384", agent_app)
         self.assertIn("--with-max-tokens=16384", agent_app)
+        self.assertIn("VERILOG_EVAL_JOBS:-4", agent_app)
         self.assertIn('"$root/configure"', agent_app)
         self.assertIn("exec make", agent_app)
         self.assertNotIn("agent_eval/runner.py", agent_app)
