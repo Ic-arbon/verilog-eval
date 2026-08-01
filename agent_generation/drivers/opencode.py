@@ -21,7 +21,8 @@ from agent_generation.drivers.base import (
 
 
 OPENCODE_BINARY = "/agent-tools/node_modules/.bin/opencode"
-OPENCODE_PROVIDER = "openai-compatible"
+OPENCODE_PROVIDER = "verilog-eval"
+OPENCODE_MODEL_ALIAS = "benchmark-model"
 OPENCODE_CONFIG = "/workspace/.agent-config/opencode.json"
 
 
@@ -46,7 +47,7 @@ class OpenCodeDriver:
                 "benchmark": {
                     "description": "Complete one isolated artifact benchmark.",
                     "mode": "primary",
-                    "model": f"{OPENCODE_PROVIDER}/{request.model}",
+                    "model": f"{OPENCODE_PROVIDER}/{OPENCODE_MODEL_ALIAS}",
                     "steps": request.max_turns,
                     "prompt": ARTIFACT_INSTRUCTION,
                     "permission": {
@@ -71,7 +72,8 @@ class OpenCodeDriver:
                         "apiKey": f"{{env:{self.api_key_environment}}}",
                     },
                     "models": {
-                        request.model: {
+                        OPENCODE_MODEL_ALIAS: {
+                            "id": request.model,
                             "name": request.model,
                             "reasoning": True,
                             "tool_call": True,
@@ -106,7 +108,7 @@ class OpenCodeDriver:
             "--dir",
             "/workspace",
             "--model",
-            f"{OPENCODE_PROVIDER}/{request.model}",
+            f"{OPENCODE_PROVIDER}/{OPENCODE_MODEL_ALIAS}",
             "--agent",
             "benchmark",
             inline_task,

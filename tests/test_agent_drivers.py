@@ -186,8 +186,8 @@ class OpenCodeDriverTests(unittest.TestCase):
             config_text = config_paths[0].read_text()
             config = json.loads(config_text)
             agent = config["agent"]["benchmark"]
-            provider = config["provider"]["openai-compatible"]
-            model = provider["models"]["qwen3.6-coder"]
+            provider = config["provider"]["verilog-eval"]
+            model = provider["models"]["benchmark-model"]
 
             self.assertEqual(agent["mode"], "primary")
             self.assertEqual(agent["steps"], 12)
@@ -198,6 +198,7 @@ class OpenCodeDriverTests(unittest.TestCase):
             self.assertEqual(agent["permission"]["task"], "deny")
             self.assertEqual(agent["permission"]["webfetch"], "deny")
             self.assertEqual(provider["npm"], "@ai-sdk/openai-compatible")
+            self.assertEqual(model["id"], "qwen3.6-coder")
             self.assertEqual(
                 provider["options"]["baseURL"], "http://127.0.0.1:58000/v1"
             )
@@ -219,7 +220,7 @@ class OpenCodeDriverTests(unittest.TestCase):
             self.assertEqual(command[command.index("--dir") + 1], "/workspace")
             self.assertEqual(
                 command[command.index("--model") + 1],
-                "openai-compatible/qwen3.6-coder",
+                "verilog-eval/benchmark-model",
             )
             self.assertEqual(command[command.index("--agent") + 1], "benchmark")
             self.assertTrue(command[-1].startswith(INLINE_ARTIFACT_INSTRUCTION))
