@@ -249,6 +249,11 @@ build/agent-nix-eval-<hash>/
     └── <problem>_sample01-stderr.log
 ```
 
+`*-trajectory.jsonl`保存归一化事件流，而不是Agent CLI的原始stdout。Pi的
+`message_update`仅保留事件类型、content index、delta、最终content和tool
+call；每次更新附带的累计`message`与`partial`快照会在读取stdout时丢弃。
+`message_end`、turn、tool、usage与termination事件保持完整。
+
 `*-generation.json`使用`agent-generation/v1`，分别包含：
 
 ```text

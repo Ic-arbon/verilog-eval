@@ -159,6 +159,11 @@ The Agent producer writes structured sidecars derived from the output stem:
 <problem>_sampleNN-stderr.log
 ```
 
+The trajectory is a normalized event stream, not a byte-for-byte copy of Agent
+stdout. Incremental message content, final messages, tool events, usage, and
+termination events are retained. Repeated cumulative message snapshots are
+removed while stdout is read so they do not consume memory or disk quadratically.
+
 The generation log preserves the fields consumed by the current analyzer:
 
 ```text
@@ -305,7 +310,7 @@ class ProcessResult:
     status: Literal["completed", "timeout", "error"]
     exit_code: int | None
     duration_seconds: float
-    stdout: str
+    stdout: str  # normalized trajectory events
     stderr: str
     termination_reason: Literal["timeout", "max_turns", "max_tool_calls"] | None
 ```
