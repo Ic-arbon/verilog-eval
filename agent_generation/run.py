@@ -1673,9 +1673,19 @@ def main(
             source = options.source_root
             if source is None:
                 raise RunnerError("contamination check requires a source root")
+            cache_root = Path(
+                environ.get(
+                    "VERILOG_EVAL_CACHE_ROOT",
+                    str(source / ".cache"),
+                )
+            ).resolve()
             allowed = tuple(
                 path
-                for path in (options.build_root, options.agent_tools)
+                for path in (
+                    options.build_root,
+                    options.agent_tools,
+                    cache_root,
+                )
                 if path is not None
             )
             assert_clean_source(source, allowed_roots=allowed)
