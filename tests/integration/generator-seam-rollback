@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+mode=""
+case "${1:-}" in
+  --mode=pre-cutover|--mode=post-revert) mode="${1#*=}" ;;
+  *) echo "usage: $0 --mode=pre-cutover|--mode=post-revert" >&2; exit 2 ;;
+esac
+
+root="$(cd "$(dirname "$0")/../.." && pwd)"
+flake="$root/flake.nix"
+
+# The fixed-revision runner names only prefixed legacy roots. Bare content-addressed
+# roots and rollback controls are outside its selection namespace.
+grep -q 'build_dir="\$build_root/agent-nix-eval-\$config_key"' "$flake"
+if grep -Eq 'run-config\.json|\.recoveries|quarantine-agent-runs' "$flake"; then
+  echo "legacy runner unexpectedly knows new run-store controls" >&2
+  exit 1
+fi
+
+scratch="$(mktemp -d)"
+trap 'rm -rf "$scratch"' EXIT
+mkdir -p \
+  "$scratch/$(printf 'a%.0s' {1..64})" \
+  "$scratch/$(printf 'b%.0s' {1..64})" \
+  "$scratch/quarantine" \
+  "$scratch/.recoveries"
+printf '{}\n' >"$scratch/$(printf 'a%.0s' {1..64})/run-config.json"
+printf '{}\n' >"$scratch/.recoveries/unacknowledged.json"
+printf '{}\n' >"$scratch/.recoveries/acknowledged.json"
+printf '{}\n' >"$scratch/.recoveries/partial.tmp"
+: >"$scratch/.lifecycle.lock"
+
+before="$(find "$scratch" -mindepth 1 -print | LC_ALL=C sort)"
+"$root/scripts/quarantine-agent-runs" --build-root "$scratch" --inventory >/dev/null
+after="$(find "$scratch" -mindepth 1 -print | LC_ALL=C sort)"
+test "$before" = "$after"
+
+printf 'generator seam rollback fixture (%s) passed\n' "$mode"
