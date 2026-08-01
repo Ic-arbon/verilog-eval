@@ -787,6 +787,7 @@ def collect_preparation_evidence(
         "timeout",
         "column",
         "sed",
+        "awk",
         "seq",
         "expr",
         "tee",

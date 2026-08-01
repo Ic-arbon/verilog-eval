@@ -230,6 +230,7 @@
         util-linux
         gnugrep
         gnused
+        gawk
         bash
       ]);
 
