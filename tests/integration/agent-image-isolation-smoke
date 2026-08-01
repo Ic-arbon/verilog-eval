@@ -27,7 +27,7 @@ import sys, tarfile, tempfile
 from pathlib import Path
 archive=Path(sys.argv[1]).resolve(); canary=sys.argv[2].encode(); inventory=sys.argv[3]=="inventory"
 forbidden=(b"dataset_spec-to-rtl", b"run-config.json", b"_ref.sv", b"_test.sv", b"/.git/", b"agent-summary.json")
-allowed_top={".dockerenv","bin","dev","etc","home","lib","lib64","nix","proc","root","run","sys","tmp","usr","var","workspace"}
+allowed_top={"dockerenv","bin","dev","etc","home","include","lib","lib64","libexec","nix","nix-support","proc","root","run","sbin","share","sys","tmp","usr","var","workspace"}
 required_top={"bin","etc","home","nix","tmp","usr","workspace"}
 
 def checked_copy(stream, destination, label, name):
