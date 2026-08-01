@@ -131,6 +131,7 @@ def run_agent_generation(
                 max_turns=request.max_turns,
                 max_tool_calls=request.max_tool_calls,
                 event_classifier=driver.classify_budget_event,
+                trajectory_normalizer=driver.normalize_trajectory_line,
             )
         )
         if process.usage.usage_source == "unavailable":

@@ -50,6 +50,9 @@ class AgentDriver(Protocol):
     def classify_budget_event(self, line: str) -> Optional[str]:
         ...
 
+    def normalize_trajectory_line(self, line: str) -> str:
+        ...
+
 
 class AgentExecutor(Protocol):
     """Execute one already-built Agent process specification."""

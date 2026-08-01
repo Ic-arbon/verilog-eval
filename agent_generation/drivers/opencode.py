@@ -150,3 +150,8 @@ class OpenCodeDriver:
         if isinstance(state, dict) and state.get("status") == "completed":
             return "tool"
         return None
+
+    def normalize_trajectory_line(self, line: str) -> str:
+        """Keep OpenCode events unchanged because they are already incremental."""
+
+        return line

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -20,6 +21,13 @@ from agent_generation.drivers.base import INLINE_ARTIFACT_INSTRUCTION
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
 PI_PROVIDER = "vllm-local"
 PI_CONFIG_DIR = "/workspace/.agent-config/pi"
+PI_MESSAGE_UPDATE_FIELDS = (
+    "type",
+    "contentIndex",
+    "delta",
+    "content",
+    "toolCall",
+)
 PI_ARTIFACT_SYSTEM_PROMPT = """\
 This is an artifact-only benchmark. To submit, you MUST invoke the write or edit tool
 and create /workspace/TopModule.sv. A shell command or code block written in chat text
@@ -145,3 +153,28 @@ class PiDriver:
         if event.get("type") == "tool_execution_end":
             return "tool"
         return None
+
+    def normalize_trajectory_line(self, line: str) -> str:
+        """Remove cumulative Pi snapshots while preserving incremental events."""
+
+        event = self.parse_event(line)
+        if not isinstance(event, dict) or event.get("type") != "message_update":
+            return line
+        update = event.get("assistantMessageEvent")
+        if not isinstance(update, dict) or not isinstance(update.get("type"), str):
+            return line
+
+        compact_update = {
+            name: update[name]
+            for name in PI_MESSAGE_UPDATE_FIELDS
+            if name in update
+        }
+        compact_event = {
+            "type": "message_update",
+            "assistantMessageEvent": compact_update,
+        }
+        return json.dumps(
+            compact_event,
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ) + "\n"

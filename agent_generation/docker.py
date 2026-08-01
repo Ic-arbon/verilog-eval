@@ -38,6 +38,31 @@ def _decode_output(value: object) -> str:
     return str(value)
 
 
+def _normalize_trajectory_line(
+    line: str,
+    normalizer: Optional[Callable[[str], str]],
+) -> str:
+    if normalizer is None:
+        return line
+    normalized = normalizer(line)
+    if not isinstance(normalized, str):
+        raise DockerInfrastructureError(
+            "Agent trajectory normalizer must return text"
+        )
+    return normalized
+
+
+def _normalize_trajectory(
+    value: object,
+    normalizer: Optional[Callable[[str], str]],
+) -> str:
+    trajectory = _decode_output(value)
+    return "".join(
+        _normalize_trajectory_line(line, normalizer)
+        for line in trajectory.splitlines(keepends=True)
+    )
+
+
 def _mount_source(path: Path, name: str) -> str:
     resolved = path.resolve()
     if not resolved.is_dir():
@@ -226,6 +251,7 @@ class DockerExecutor:
         stderr_lines: list[str],
         *,
         include_stdout: bool,
+        trajectory_normalizer: Optional[Callable[[str], str]],
     ) -> None:
         while True:
             try:
@@ -236,7 +262,9 @@ class DockerExecutor:
                 continue
             if label == "stdout":
                 if include_stdout:
-                    stdout_lines.append(line)
+                    stdout_lines.append(
+                        _normalize_trajectory_line(line, trajectory_normalizer)
+                    )
             else:
                 stderr_lines.append(line)
 
@@ -304,7 +332,9 @@ class DockerExecutor:
                 ended_streams += 1
                 continue
             if label == "stdout":
-                stdout_lines.append(line)
+                stdout_lines.append(
+                    _normalize_trajectory_line(line, spec.trajectory_normalizer)
+                )
                 if spec.event_classifier is not None:
                     event_kind = spec.event_classifier(line)
                     if event_kind is not None and event_kind not in BUDGET_EVENT_KINDS:
@@ -345,6 +375,7 @@ class DockerExecutor:
             stdout_lines,
             stderr_lines,
             include_stdout=termination_reason in {None, "timeout"},
+            trajectory_normalizer=spec.trajectory_normalizer,
         )
 
         if termination_reason == "timeout":
@@ -402,7 +433,10 @@ class DockerExecutor:
                 status="timeout",
                 exit_code=124,
                 duration_seconds=time.monotonic() - started,
-                stdout=_decode_output(error.output),
+                stdout=_normalize_trajectory(
+                    error.output,
+                    spec.trajectory_normalizer,
+                ),
                 stderr=_decode_output(error.stderr),
                 usage=AgentUsage.unavailable(),
                 termination_reason="timeout",
@@ -416,7 +450,10 @@ class DockerExecutor:
             status="completed" if completed.returncode == 0 else "error",
             exit_code=completed.returncode,
             duration_seconds=time.monotonic() - started,
-            stdout=_decode_output(completed.stdout),
+            stdout=_normalize_trajectory(
+                completed.stdout,
+                spec.trajectory_normalizer,
+            ),
             stderr=_decode_output(completed.stderr),
             usage=AgentUsage.unavailable(),
         )

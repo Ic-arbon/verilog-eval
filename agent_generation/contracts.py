@@ -170,6 +170,7 @@ class AgentProcessSpec:
     max_turns: Optional[int] = None
     max_tool_calls: Optional[int] = None
     event_classifier: Optional[Callable[[str], Optional[str]]] = None
+    trajectory_normalizer: Optional[Callable[[str], str]] = None
 
     def __post_init__(self) -> None:
         if not self.command or any(not argument for argument in self.command):
