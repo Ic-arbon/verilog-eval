@@ -614,15 +614,11 @@ LIBOBJS
 pregen_dir
 problems_file
 dataset_dir
-top_p
-temperature
-max_tokens
 samples
 task
 rules
 examples
 selected_generator
-model
 IVERILOG
 target_alias
 host_alias
@@ -1835,9 +1831,8 @@ esac
 fi
 
 
-
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: using model: ${model}" >&5
-printf "%s\n" "$as_me: using model: ${model}" >&6;}
+# Model producer settings are consumed only while writing .generator-args.
+# They are intentionally not config.status substitutions.
 
 #-------------------------------------------------------------------------
 # Generator Program Protocol selection
@@ -1873,6 +1868,13 @@ esac
 
 { printf "%s\n" "$as_me:${as_lineno-$LINENO}: using generator: ${generator}" >&5
 printf "%s\n" "$as_me: using generator: ${generator}" >&6;}
+if test "${generator}" = model
+then :
+
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: using model: ${model}" >&5
+printf "%s\n" "$as_me: using model: ${model}" >&6;}
+
+fi
 
 
 # Check whether --with-generator-config was given.
@@ -2004,9 +2006,13 @@ esac
 fi
 
 
+if test "${generator}" = model
+then :
 
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: using max response tokens: ${max_tokens}" >&5
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: using max response tokens: ${max_tokens}" >&5
 printf "%s\n" "$as_me: using max response tokens: ${max_tokens}" >&6;}
+
+fi
 
 #-------------------------------------------------------------------------
 # --with-temperature
@@ -2023,9 +2029,13 @@ esac
 fi
 
 
+if test "${generator}" = model
+then :
 
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: using temperature: ${temperature}" >&5
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: using temperature: ${temperature}" >&5
 printf "%s\n" "$as_me: using temperature: ${temperature}" >&6;}
+
+fi
 
 #-------------------------------------------------------------------------
 # --with-top-p
@@ -2042,9 +2052,13 @@ esac
 fi
 
 
+if test "${generator}" = model
+then :
 
-{ printf "%s\n" "$as_me:${as_lineno-$LINENO}: using top-p: ${top_p}" >&5
+  { printf "%s\n" "$as_me:${as_lineno-$LINENO}: using top-p: ${top_p}" >&5
 printf "%s\n" "$as_me: using top-p: ${top_p}" >&6;}
+
+fi
 
 
 #-------------------------------------------------------------------------

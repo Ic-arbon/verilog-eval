@@ -43,6 +43,17 @@ class AgentConfigureTests(unittest.TestCase):
                 [f"--run-config={config}"],
             )
             makefile = (build / "Makefile").read_text()
+            agent_records = "\n".join(
+                (
+                    result.stdout,
+                    result.stderr,
+                    (build / "config.log").read_text(),
+                    (build / "config.status").read_text(),
+                    makefile,
+                )
+            )
+            for sampling_control in ("temperature", "top_p", "top-p"):
+                self.assertNotIn(sampling_control, agent_records)
             for leaked in (
                 "opencode",
                 "pi",

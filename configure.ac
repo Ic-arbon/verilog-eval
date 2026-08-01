@@ -52,8 +52,8 @@ AC_ARG_WITH(model,
   [model="${with_model}"],
   [model="gpt4-turbo"])
 
-AC_SUBST([model])
-AC_MSG_NOTICE([using model: ${model}])
+# Model producer settings are consumed only while writing .generator-args.
+# They are intentionally not config.status substitutions.
 
 #-------------------------------------------------------------------------
 # Generator Program Protocol selection
@@ -74,6 +74,9 @@ AS_CASE([${generator}],
 
 AC_SUBST([selected_generator])
 AC_MSG_NOTICE([using generator: ${generator}])
+AS_IF([test "${generator}" = model], [
+  AC_MSG_NOTICE([using model: ${model}])
+])
 
 AC_ARG_WITH(generator-config,
   AS_HELP_STRING([--with-generator-config],[Opaque producer configuration reference]),
@@ -150,8 +153,9 @@ AC_ARG_WITH(max-tokens,
   [max_tokens="${with_max_tokens}"],
   [max_tokens=1024])
 
-AC_SUBST([max_tokens])
-AC_MSG_NOTICE([using max response tokens: ${max_tokens}])
+AS_IF([test "${generator}" = model], [
+  AC_MSG_NOTICE([using max response tokens: ${max_tokens}])
+])
 
 #-------------------------------------------------------------------------
 # --with-temperature
@@ -162,8 +166,9 @@ AC_ARG_WITH(temperature,
   [temperature="${with_temperature}"],
   [temperature=0.85])
 
-AC_SUBST([temperature])
-AC_MSG_NOTICE([using temperature: ${temperature}])
+AS_IF([test "${generator}" = model], [
+  AC_MSG_NOTICE([using temperature: ${temperature}])
+])
 
 #-------------------------------------------------------------------------
 # --with-top-p 
@@ -174,8 +179,9 @@ AC_ARG_WITH(top-p,
   [top_p="${with_top_p}"],
   [top_p=0.95])
 
-AC_SUBST([top_p])
-AC_MSG_NOTICE([using top-p: ${top_p}])
+AS_IF([test "${generator}" = model], [
+  AC_MSG_NOTICE([using top-p: ${top_p}])
+])
 
 
 #-------------------------------------------------------------------------
