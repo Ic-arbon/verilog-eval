@@ -9,8 +9,18 @@
       pkgs = nixpkgs.legacyPackages.${system};
       runtimeLibraryPath = pkgs.lib.makeLibraryPath [ pkgs.stdenv.cc.cc.lib ];
 
-      agentSandboxPackages = with pkgs; [
-        nodejs_22
+      nodeRuntime = pkgs.runCommand "verilog-agent-node-runtime" {
+        nativeBuildInputs = [ pkgs.removeReferencesTo ];
+      } ''
+        mkdir -p "$out/bin"
+        cp ${pkgs.nodejs_22}/bin/node "$out/bin/node"
+        chmod 0555 "$out/bin/node"
+        remove-references-to -t ${pkgs.nodejs_22} "$out/bin/node"
+      '';
+
+      agentSandboxPackages = [
+        nodeRuntime
+      ] ++ (with pkgs; [
         bash
         iverilog
         python311
@@ -23,7 +33,7 @@
         util-linux
         which
         stdenv.cc.cc.lib
-      ];
+      ]);
       minimalRtlSandboxPackages = agentSandboxPackages ++ (with pkgs; [
         verilator
         yosys
@@ -62,8 +72,8 @@
             ];
           };
         };
-      agentSandboxImageTag = "v1";
-      minimalRtlSandboxImageTag = "minimal-rtl-v1";
+      agentSandboxImageTag = "standard";
+      minimalRtlSandboxImageTag = "rtl";
       agentSandboxImage = mkAgentSandboxImage
         agentSandboxImageTag agentSandboxPackages agentSandboxPath;
       minimalRtlSandboxImage = mkAgentSandboxImage
@@ -210,178 +220,69 @@
         '';
       };
 
-      runAgentEvaluation = pkgs.writeShellApplication {
+      agentRuntimePath = pkgs.lib.makeBinPath (with pkgs; [
+        python311
+        docker_29
+        iverilog
+        gnumake
+        gitMinimal
+        coreutils
+        util-linux
+        gnugrep
+        gnused
+        bash
+      ]);
+
+      runAgentEvaluation = pkgs.writeTextFile {
         name = "verilog-agent-eval";
-        runtimeInputs = with pkgs; [
-          python311
-          docker_29
-          iverilog
-          gnumake
-          gitMinimal
-          coreutils
-          util-linux
-          gnugrep
-          gnused
-          bash
-          curl
-        ];
-        text = ''
-          root="''${VERILOG_EVAL_ROOT:-}"
-          if [[ -z "$root" ]]; then
-            root="$(git rev-parse --show-toplevel)"
-          fi
-          export VERILOG_EVAL_ROOT="$root"
-          export LD_LIBRARY_PATH="${runtimeLibraryPath}:''${LD_LIBRARY_PATH:-}"
-          source_revision="$(git -C "$root" rev-parse HEAD)"
-          source_diff_sha256="$(
-            git -C "$root" diff --no-ext-diff --binary HEAD \
-              | sha256sum \
-              | cut -d' ' -f1
-          )"
-          export VERILOG_EVAL_SOURCE_REVISION="$source_revision"
-          export VERILOG_EVAL_SOURCE_DIFF_SHA256="$source_diff_sha256"
+        destination = "/bin/verilog-agent-eval";
+        executable = true;
+        text = ''#!${pkgs.python311}/bin/python3 -I
+import os
+import subprocess
+import sys
 
-          agent_name=opencode
-          for argument in "$@"; do
-            case "$argument" in
-              --with-agent=*) agent_name="''${argument#*=}" ;;
-            esac
-          done
-          case "$agent_name" in
-            pi|opencode) ;;
-            *)
-              echo "Agent must be pi or opencode" >&2
-              exit 2
-              ;;
-          esac
+python = "${pkgs.python311}/bin/python3"
+git = "${pkgs.gitMinimal}/bin/git"
+root = os.environ.get("VERILOG_EVAL_ROOT")
+if not root:
+    completed = subprocess.run(
+        [git, "rev-parse", "--show-toplevel"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={"PATH": "${pkgs.gitMinimal}/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
+    )
+    root = completed.stdout.strip()
+root = os.path.realpath(root)
 
-          if [[ -z "''${AGENT_EVAL_AGENT_TOOLS:-}" ]]; then
-            echo "AGENT_EVAL_AGENT_TOOLS must be set explicitly" >&2
-            exit 2
-          fi
-          if [[ ! -d "$AGENT_EVAL_AGENT_TOOLS" ]]; then
-            echo "Explicit Agent tools prefix is not a directory" >&2
-            exit 2
-          fi
-          agent_tools="$(realpath -e -- "$AGENT_EVAL_AGENT_TOOLS")"
-          if [[ ! -x "$agent_tools/node_modules/.bin/$agent_name" ]]; then
-            echo "Explicit Agent tools prefix has no executable $agent_name" >&2
-            exit 2
-          fi
-          export AGENT_EVAL_AGENT_TOOLS="$agent_tools"
-          agent_tools_content_sha256="$(
-            "$root/scripts/agent-tools-digest" "$agent_tools"
-          )"
-          export AGENT_EVAL_AGENT_TOOLS_CONTENT_SHA256="$agent_tools_content_sha256"
-
-          export AGENT_EVAL_DOCKER=${pkgs.docker_29}/bin/docker
-          export AGENT_EVAL_DOCKER_IMAGE_BASE="${agentSandboxImageName}:${agentSandboxImageTag}"
-          export AGENT_EVAL_DOCKER_IMAGE_RTL="${agentSandboxImageName}:${minimalRtlSandboxImageTag}"
-          if [[ -r "$AGENT_EVAL_AGENT_TOOLS/.versions" ]]; then
-            agent_tools_versions="$(
-              tr -d '\r\n' <"$AGENT_EVAL_AGENT_TOOLS/.versions"
-            )"
-            export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$agent_tools_versions"
-          fi
-          if [[ -r "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" ]]; then
-            agent_tools_lock_sha256="$(
-              sha256sum "$AGENT_EVAL_AGENT_TOOLS/package-lock.json" | cut -d' ' -f1
-            )"
-            export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$agent_tools_lock_sha256"
-          fi
-
-          export OPENAI_API_BASE="''${OPENAI_API_BASE:-http://127.0.0.1:58000/v1}"
-          if [[ -z "''${OPENAI_API_KEY:-}" ]]; then
-            key_file="''${VERILOG_EVAL_VLLM_KEY_FILE:-/opt/llm/api-key.env}"
-            if [[ -r "$key_file" ]]; then
-              key_line="$(grep -m1 '^VLLM_API_KEY=' "$key_file" || true)"
-              export OPENAI_API_KEY="''${key_line#VLLM_API_KEY=}"
-            fi
-            export OPENAI_API_KEY="''${OPENAI_API_KEY:-local}"
-          fi
-
-          health_url="''${OPENAI_API_BASE%/v1}/health"
-          if ! curl --fail --silent --show-error "$health_url" >/dev/null; then
-            echo "vLLM is not healthy at $health_url" >&2
-            exit 1
-          fi
-
-          jobs="''${VERILOG_EVAL_JOBS:-4}"
-          if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
-            echo "VERILOG_EVAL_JOBS must be a positive integer" >&2
-            exit 2
-          fi
-
-          tool_profile=base
-          for argument in "$@"; do
-            case "$argument" in
-              --with-agent-tool-profile=*)
-                tool_profile="''${argument#*=}"
-                ;;
-            esac
-          done
-          case "$tool_profile" in
-            base)
-              image_archive=${agentSandboxImage}
-              image_reference="$AGENT_EVAL_DOCKER_IMAGE_BASE"
-              ;;
-            rtl)
-              image_archive=${minimalRtlSandboxImage}
-              image_reference="$AGENT_EVAL_DOCKER_IMAGE_RTL"
-              ;;
-            *)
-              echo "Agent tool profile must be base or rtl" >&2
-              exit 2
-              ;;
-          esac
-          docker load --input "$image_archive" >/dev/null
-          image_id="$(docker image inspect --format '{{.Id}}' "$image_reference")"
-          if [[ ! "$image_id" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-            echo "Docker image ID is invalid: $image_id" >&2
-            exit 1
-          fi
-          export AGENT_EVAL_DOCKER_IMAGE_ID="$image_id"
-
-          configure_args=(
-            --with-generator=agent
-            --with-model=qwen3.6-coder
-            --with-task=spec-to-rtl
-            --with-agent=opencode
-            --with-agent-timeout=300
-            --with-agent-max-turns=20
-            --with-agent-max-tool-calls=50
-            --with-agent-max-input-tokens=16384
-            --with-agent-thinking=on
-            --with-agent-tool-profile=base
-            --with-samples=1
-            --with-examples=0
-            --with-max-tokens=16384
-            --with-temperature=0.6
-            --with-top-p=0.95
-            "$@"
-          )
-          config_key="$(
-            printf '%s\0' \
-              "$source_revision" \
-              "$source_diff_sha256" \
-              "$OPENAI_API_BASE" \
-              "$image_id" \
-              "$agent_tools_content_sha256" \
-              "''${AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256:-unavailable}" \
-              "''${configure_args[@]}" \
-              | sha256sum \
-              | cut -c1-12
-          )"
-          build_root="''${VERILOG_EVAL_BUILD_ROOT:-$root/build}"
-          build_dir="$build_root/agent-nix-eval-$config_key"
-          mkdir -p "$build_dir"
-
-          echo "Configuring Agent evaluation in $build_dir"
-          echo "Running make with $jobs parallel jobs"
-          cd "$build_dir"
-          "$root/configure" "''${configure_args[@]}"
-          exec make --jobs="$jobs" SHELL=${pkgs.bash}/bin/bash
-        '';
+environment = dict(os.environ)
+for name in tuple(environment):
+    upper = name.upper()
+    if (
+        upper.startswith(("GIT_", "PYTHON", "DYLD_", "NPM_"))
+        or upper in {"BASH_ENV", "ENV", "NODE_OPTIONS", "LD_PRELOAD", "LD_LIBRARY_PATH"}
+        or upper.endswith("_PROXY")
+    ):
+        environment.pop(name, None)
+environment.update({
+    "PATH": "${agentRuntimePath}",
+    "LANG": "C.UTF-8",
+    "LC_ALL": "C.UTF-8",
+    "VERILOG_EVAL_ROOT": root,
+    "VERILOG_EVAL_CACHE_ROOT": environment.get("VERILOG_EVAL_CACHE_ROOT", os.path.join(root, ".cache")),
+    "AGENT_EVAL_DOCKER": "${pkgs.docker_29}/bin/docker",
+    "AGENT_EVAL_DOCKER_IMAGE_STANDARD": "${agentSandboxImageName}:${agentSandboxImageTag}",
+    "AGENT_EVAL_DOCKER_ARCHIVE_STANDARD": "${agentSandboxImage}",
+    "AGENT_EVAL_DOCKER_IMAGE_RTL": "${agentSandboxImageName}:${minimalRtlSandboxImageTag}",
+    "AGENT_EVAL_DOCKER_ARCHIVE_RTL": "${minimalRtlSandboxImage}",
+})
+os.execve(
+    python,
+    [python, "-I", os.path.join(root, "scripts/run-agent-evaluation"), *sys.argv[1:]],
+    environment,
+)
+'';
       };
 
       runVllmEvaluation = pkgs.writeShellApplication {
@@ -417,6 +318,8 @@
         vllm = runVllmEvaluation;
         agent-eval = runAgentEvaluation;
         agent-tools-setup = setupAgentTools;
+        agent-sandbox-image = agentSandboxImage;
+        agent-rtl-sandbox-image = minimalRtlSandboxImage;
       };
 
       apps.${system} = {
@@ -456,6 +359,7 @@
           # Evaluation harness
           python311
           setupPython
+          autoconf
           gnumake
           bash
           coreutils  # seq, timeout, expr

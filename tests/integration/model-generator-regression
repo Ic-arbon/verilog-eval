@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
+cd "$root"
+git diff --exit-code 245c19918f18abb7e6aa328282f3624afc0e2884 -- scripts/sv-generate
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest \
+  tests.test_generator_architecture.GraderPreservationTests \
+  tests.test_generator_architecture.ConfiguredGeneratorSeamTests.test_model_static_argv_is_exact_legacy_sequence \
+  tests.test_generator_architecture.ConfiguredGeneratorSeamTests.test_generated_make_invokes_model_through_adapter_with_exact_argv \
+  -v
+echo "model generator and Icarus path regression passed"

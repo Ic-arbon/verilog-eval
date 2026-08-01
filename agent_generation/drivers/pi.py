@@ -19,7 +19,7 @@ from agent_generation.drivers.base import INLINE_ARTIFACT_INSTRUCTION
 
 
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
-PI_PROVIDER = "vllm-local"
+PI_PROVIDER = "openai-compatible"
 PI_CONFIG_DIR = "/workspace/.agent-config/pi"
 PI_MESSAGE_UPDATE_FIELDS = (
     "type",
@@ -47,11 +47,6 @@ class PiDriver:
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
-
-    @property
-    def profile_id(self) -> str:
-        suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"pi-minimal-system-inline-artifact-{suffix}-v1"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_dir = request.workspace / ".agent-config" / "pi"

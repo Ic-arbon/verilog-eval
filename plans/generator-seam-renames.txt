@@ -1,0 +1,16 @@
+Production renames completed in atomic Step 4:
+
+- Docker tag verilog-eval-agent-sandbox:v1 -> verilog-eval-agent-sandbox:standard
+- Docker tag verilog-eval-agent-sandbox:minimal-rtl-v1 -> verilog-eval-agent-sandbox:rtl
+- Agent tools digest domain verilog-eval-agent-tools-v1 -> verilog-eval-agent-tools
+- Pi/OpenCode provider vllm-local -> openai-compatible
+- numbered Agent profile identifiers -> removed; run_config_sha256 is identity
+
+Documentation/plan renames reserved for Step 5:
+
+- docs/agent-generator-protocol-v1.md -> docs/agent-generator-interface.md
+- plans/agent-generator-protocol-v1.md -> plans/agent-generator-protocol.md
+
+Every relative Markdown link to either old path must move in the same Step-5 commit.
+External OpenAI `/v1`, dependency versions, benchmark names/history, Git object IDs,
+and Docker content IDs are not owned version labels and remain unchanged.

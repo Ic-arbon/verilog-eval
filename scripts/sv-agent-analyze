@@ -13,13 +13,16 @@ if str(REPO_ROOT) not in sys.path:
 
 from agent_generation.report import (  # noqa: E402
     ReportError,
+    ReportTransactionError,
     build_agent_report,
     write_agent_report,
 )
+from agent_generation.run_config import RunConfigError, load_run_config  # noqa: E402
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser()
+    parser.add_argument("--run-config", type=Path, required=True)
     parser.add_argument("--summary-csv", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-text", type=Path, required=True)
@@ -29,13 +32,23 @@ def parse_args(argv=None):
 def main(argv=None) -> int:
     parser, args = parse_args(argv)
     try:
-        report = build_agent_report(args.summary_csv)
+        config_path = args.run_config.resolve(strict=True)
+        config = load_run_config(config_path)
+        digest = config_path.parent.name
+        report = build_agent_report(
+            args.summary_csv,
+            run_config_sha256=digest,
+            expected_problems=config["benchmark"]["problems"],
+            expected_samples_per_problem=config["benchmark"]["samples"],
+        )
         write_agent_report(
             report,
+            summary_csv=args.summary_csv,
+            run_config_sha256=digest,
             json_path=args.output_json,
             text_path=args.output_text,
         )
-    except ReportError as error:
+    except (ReportError, ReportTransactionError, RunConfigError, OSError) as error:
         parser.exit(2, f"ERROR: {error}\n")
     return 0
 

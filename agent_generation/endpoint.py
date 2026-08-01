@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import ipaddress
 import json
+import math
 import os
 import re
 import signal
@@ -265,6 +266,10 @@ def _bound_json(value: Any, *, depth: int = 0, counter: list[int]) -> None:
     elif isinstance(value, str):
         if len(value.encode("utf-8")) > 64 * 1024:
             raise EndpointError("endpoint JSON string is oversized")
+    elif isinstance(value, float) and not math.isfinite(value):
+        raise EndpointError("endpoint JSON contains a non-finite number")
+    elif isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**63 - 1:
+        raise EndpointError("endpoint JSON integer is out of range")
     elif value is not None and not isinstance(value, (bool, int, float)):
         raise EndpointError("endpoint JSON contains an unsupported value")
 
@@ -272,7 +277,7 @@ def _bound_json(value: Any, *, depth: int = 0, counter: list[int]) -> None:
 def _validate_models(body: bytes, model: str) -> int:
     try:
         value = json.loads(body.decode("utf-8"), object_pairs_hook=_json_without_duplicates)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, ValueError) as error:
         raise EndpointError(f"endpoint model list is invalid JSON: {error}") from error
     _bound_json(value, counter=[0])
     if not isinstance(value, dict):
@@ -379,6 +384,7 @@ def preflight_endpoint(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
+            env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"},
         )
     except OSError as error:
         raise EndpointError(f"cannot start endpoint helper: {error}") from error

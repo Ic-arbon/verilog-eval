@@ -1,39 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
-
-root="${VERILOG_EVAL_ROOT:-}"
-if [[ -z "$root" ]]; then
-  root="$(git rev-parse --show-toplevel)"
-fi
-
-for program in docker nix python3; do
-  if ! command -v "$program" >/dev/null 2>&1; then
-    echo "missing required program: $program" >&2
-    exit 2
-  fi
-done
-
+root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
+for program in docker nix python3; do command -v "$program" >/dev/null || exit 2; done
 stamp="$(date -u '+%Y%m%dT%H%M%SZ')-$$"
-run_root="${AGENT_EVAL_BUDGET_RUN_ROOT:-$root/build/agent-budget-$stamp}"
+build_root="${AGENT_EVAL_BUDGET_RUN_ROOT:-$root/build/agent-budget-$stamp}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-budget.XXXXXX")"
-tools="$scratch/agent-tools"
-problem_file="$scratch/problems.txt"
-before_containers="$scratch/containers-before.txt"
-after_containers="$scratch/containers-after.txt"
-
-cleanup() {
-  chmod -R u+w "$scratch" 2>/dev/null || true
-  rm -rf "$scratch" || true
-}
+tools="$scratch/agent-tools"; package="$tools/node_modules/@earendil-works/pi-coding-agent"
+problem_file="$scratch/problems.txt"; base_file="$scratch/base-url"; path_file="$scratch/run-path"
+before="$scratch/before"; after="$scratch/after"; server_pid=""
+cleanup(){ [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true; chmod -R u+w "$scratch" 2>/dev/null || true; rm -rf "$scratch" || true; }
 trap cleanup EXIT INT TERM
-
-printf 'Prob001_zero\n' >"$problem_file"
-mkdir -p "$tools/node_modules/.bin" "$run_root"
-
-cat >"$tools/node_modules/.bin/pi" <<'FAKE_AGENT'
+printf 'Prob001_zero\n' >"$problem_file"; mkdir -p "$package" "$build_root"
+cat >"$package/pi" <<'FAKE_AGENT'
 #!/usr/bin/env bash
 set -euo pipefail
-
 cat >TopModule.sv <<'VERILOG'
 module TopModule(output zero);
   assign zero = 1'b0;
@@ -49,95 +29,53 @@ for turn in 1 2; do
 done
 sleep 120
 FAKE_AGENT
-chmod 0555 "$tools/node_modules/.bin/pi"
-chmod 0555 "$tools" "$tools/node_modules" "$tools/node_modules/.bin"
-
-docker ps -a --format '{{.Names}}' | sort >"$before_containers"
-
-export VERILOG_EVAL_ROOT="$root"
-export VERILOG_EVAL_BUILD_ROOT="$run_root"
-export VERILOG_EVAL_JOBS=1
-export AGENT_EVAL_AGENT_TOOLS="$tools"
-
+chmod 0555 "$package/pi"
+cat >"$tools/package-lock.json" <<'JSON'
+{"name":"agent-tools","lockfileVersion":3,"packages":{"":{"dependencies":{"@earendil-works/pi-coding-agent":"0.82.1"}},"node_modules/@earendil-works/pi-coding-agent":{"version":"0.82.1","bin":{"pi":"pi"}}}}
+JSON
+"$root/tests/integration/openai-model-list-server" --write-base-url "$base_file" & server_pid=$!
+for _ in {1..100}; do [[ -s "$base_file" ]] && break; sleep 0.05; done
+base_url="$(cat "$base_file")"; : >"$path_file"; chmod 0600 "$path_file"
+docker ps -a --format '{{.Names}}' | sort >"$before"
+export VERILOG_EVAL_ROOT="$root" VERILOG_EVAL_BUILD_ROOT="$build_root" VERILOG_EVAL_JOBS=1
+export AGENT_EVAL_AGENT_TOOLS="$tools" OPENAI_API_KEY="smoke-key"
 set +e
 nix run "path:$root#agent-eval" -- \
-  --with-generator=agent \
-  --with-agent=pi \
-  --with-problems="$problem_file" \
-  --with-agent-timeout=60 \
-  --with-agent-max-turns=2 \
-  --with-agent-max-tool-calls=10 \
-  --with-agent-max-input-tokens=16384 \
-  --with-agent-thinking=off \
-  --with-agent-tool-profile=base \
-  2>&1 | tee "$run_root/console.log"
-evaluation_status=${PIPESTATUS[0]}
-set -e
-if (( evaluation_status != 0 )); then
-  echo "budget smoke failed; artifacts preserved at $run_root" >&2
-  exit "$evaluation_status"
-fi
-
-docker ps -a --format '{{.Names}}' | sort >"$after_containers"
-leftovers="$(comm -13 "$before_containers" "$after_containers" | grep '^verilog-eval-' || true)"
-if [[ -n "$leftovers" ]]; then
-  echo "new Agent containers were not removed:" >&2
-  echo "$leftovers" >&2
-  exit 1
-fi
-
-python3 - "$run_root" <<'PY'
-import hashlib
-import json
-import sys
+  --with-agent=pi --with-openai-api-base="$base_url" \
+  --with-problems="$problem_file" --with-agent-timeout=60 \
+  --with-agent-max-turns=2 --with-agent-max-tool-calls=10 \
+  --with-agent-max-input-tokens=16384 --with-agent-thinking=off \
+  --with-agent-toolset=standard --run-path-file="$path_file" \
+  2>&1 | tee "$build_root/console.log"
+status=${PIPESTATUS[0]}; set -e
+(( status == 0 )) || { echo "budget smoke failed at $build_root" >&2; exit "$status"; }
+run_dir="$(cat "$path_file")"
+docker ps -a --format '{{.Names}}' | sort >"$after"
+leftovers="$(comm -13 "$before" "$after" | grep '^verilog-eval-' || true)"
+[[ -z "$leftovers" ]] || { echo "new Agent containers remain: $leftovers" >&2; exit 1; }
+python3 - "$run_dir" <<'PY'
+import hashlib, json, sys
 from pathlib import Path
-
-run_root = Path(sys.argv[1])
-manifests = list(run_root.glob("agent-nix-eval-*/*/*-generation.json"))
-assert len(manifests) == 1, manifests
-manifest_path = manifests[0]
-manifest = json.loads(manifest_path.read_text())
-assert manifest["execution"]["status"] == "error", manifest
-assert manifest["execution"]["exit_code"] == 125, manifest
-assert manifest["execution"]["termination_reason"] == "max_turns", manifest
-assert manifest["submission"]["status"] == "published", manifest
-assert manifest["limits"]["max_turns"] == 2, manifest
-assert manifest["limits"]["max_input_tokens"] == 16384, manifest
-assert manifest["usage"]["turns"] == 2, manifest
-assert manifest["execution"]["duration_seconds"] < 15, manifest
-
-trajectory_path = manifest_path.with_name(
-    manifest_path.name.removesuffix("-generation.json") + "-trajectory.jsonl"
-)
-trajectory_events = [
-    json.loads(line) for line in trajectory_path.read_text().splitlines()
-]
-message_update = next(
-    event for event in trajectory_events if event.get("type") == "message_update"
-)
-assert "message" not in message_update, message_update
-assert "partial" not in message_update["assistantMessageEvent"], message_update
-assert message_update["assistantMessageEvent"]["delta"] == "next", message_update
-assert trajectory_path.stat().st_size < 2048, trajectory_path.stat().st_size
-
-sample_path = manifest_path.with_name(
-    manifest_path.name.removesuffix("-generation.json") + ".sv"
-)
-actual_digest = hashlib.sha256(sample_path.read_bytes()).hexdigest()
-assert actual_digest == manifest["submission"]["sha256"]
-summary_path = manifest_path.parents[1] / "summary.txt"
-assert "pass_rate             =     100.00" in summary_path.read_text()
-report_path = manifest_path.parents[1] / "agent-summary.json"
-report = json.loads(report_path.read_text())
-assert report["correctness"]["passed"] == 1, report
-assert report["execution"]["status_counts"] == {"error": 1}, report
-assert report["submission"]["status_counts"] == {"published": 1}, report
-assert report["samples"][0]["limits"] == manifest["limits"], report
-
-print("budget_status=passed")
-print(f"manifest={manifest_path}")
-print(f"sample_sha256={actual_digest}")
+run=Path(sys.argv[1]); manifests=list(run.glob("*/*-generation.json")); assert len(manifests)==1
+path=manifests[0]; manifest=json.loads(path.read_text())
+assert manifest["execution"]["status"]=="error", manifest
+assert manifest["execution"]["exit_code"]==86, manifest
+assert manifest["execution"]["termination_reason"]=="max_turns", manifest
+assert manifest["submission"]["status"]=="published", manifest
+assert manifest["limits"]["max_turns"]==2, manifest
+assert manifest["usage"]["turns"]==2, manifest
+trajectory=path.with_name(path.name.removesuffix("-generation.json")+"-trajectory.jsonl")
+events=[json.loads(line) for line in trajectory.read_text().splitlines()]
+update=next(event for event in events if event.get("type")=="message_update")
+assert "message" not in update and "partial" not in update["assistantMessageEvent"], update
+assert trajectory.stat().st_size < 2048
+sample=path.with_name(path.name.removesuffix("-generation.json")+".sv")
+assert hashlib.sha256(sample.read_bytes()).hexdigest()==manifest["artifacts"]["candidate"]["sha256"]
+report=json.loads((run/"agent-summary.json").read_text())
+assert report["execution"]["status_counts"]=={"error":1}, report
+assert report["submission"]["status_counts"]=={"published":1}, report
+print(f"manifest={path}")
 PY
-
+"$root/scripts/validate-agent-run" --expected-samples=1 "$run_dir"
 echo "no new Agent containers remain"
-echo "budget artifacts preserved at $run_root"
+echo "budget artifacts preserved at $run_dir"

@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
+tools="${EXTERNAL_AGENT_TOOLS:-${AGENT_EVAL_AGENT_TOOLS:-}}"
+[[ -n "$tools" && -x "$tools/node_modules/.bin/pi" && -x "$tools/node_modules/.bin/opencode" ]] || {
+  echo "set EXTERNAL_AGENT_TOOLS to the pinned Pi/OpenCode prefix" >&2; exit 2;
+}
+for program in nix python3; do command -v "$program" >/dev/null || exit 2; done
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-request-smoke.XXXXXX")"
+server_pid=""
+cleanup(){ [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true; rm -rf "$scratch"; }
+trap cleanup EXIT INT TERM
+printf 'Prob001_zero\n' >"$scratch/problems.txt"
+export OPENAI_API_KEY="request-smoke-key"
+export AGENT_EVAL_AGENT_TOOLS="$tools"
+export VERILOG_EVAL_ROOT="$root"
+export VERILOG_EVAL_JOBS=1
+
+run_case(){
+  agent="$1"; failures="$2"; label="$agent-retry$failures"
+  base="$scratch/$label.base"; log="$scratch/$label.jsonl"; path="$scratch/$label.path"
+  : >"$path"; chmod 0600 "$path"
+  "$root/tests/integration/openai-agent-server" \
+    --log "$log" --write-base-url "$base" --fail-first "$failures" &
+  server_pid=$!
+  for _ in {1..100}; do [[ -s "$base" ]] && break; sleep 0.05; done
+  [[ -s "$base" ]] || { echo "request server failed to start" >&2; return 1; }
+  VERILOG_EVAL_BUILD_ROOT="$scratch/build-$label" \
+    nix run "path:$root#agent-eval" -- \
+      --with-agent="$agent" \
+      --with-openai-api-base="$(cat "$base")" \
+      --with-problems="$scratch/problems.txt" \
+      --with-agent-timeout=90 \
+      --with-agent-max-turns=5 \
+      --with-agent-max-tool-calls=5 \
+      --with-agent-thinking=off \
+      --run-path-file="$path"
+  kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; server_pid=""
+  run="$(cat "$path")"
+  "$root/scripts/validate-agent-run" --expected-samples=1 "$run"
+  python3 - "$log" "$failures" "$run" <<'PY'
+import json, sys
+from pathlib import Path
+log=Path(sys.argv[1]); failures=int(sys.argv[2]); run=Path(sys.argv[3])
+requests=[json.loads(line) for line in log.read_text().splitlines()]
+assert len(requests) >= failures + 2, len(requests)
+for request in requests:
+    body=request["body"]
+    assert "temperature" not in body and "top_p" not in body
+manifest=json.loads(next(run.glob("*/*-generation.json")).read_text())
+assert manifest["execution"]["status"] == "completed", manifest
+assert manifest["submission"]["status"] == "published", manifest
+assert manifest["usage"]["input_tokens"] is not None, manifest
+PY
+}
+
+run_case pi 0
+run_case opencode 0
+run_case pi 1
+run_case opencode 1
+echo "pinned Pi/OpenCode request, retry, and tool continuation smoke passed"

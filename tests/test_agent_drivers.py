@@ -52,7 +52,7 @@ class PiDriverTests(unittest.TestCase):
             config_text = config_paths[0].read_text()
             config = json.loads(config_text)
             settings = json.loads(config_paths[1].read_text())
-            provider = config["providers"]["vllm-local"]
+            provider = config["providers"]["openai-compatible"]
             model = provider["models"][0]
             self.assertEqual(provider["baseUrl"], "http://127.0.0.1:58000/v1")
             self.assertEqual(provider["api"], "openai-completions")
@@ -93,9 +93,7 @@ class PiDriverTests(unittest.TestCase):
             self.assertIn("Public task specification:", command[-1])
             self.assertIn(request.prompt_text, command[-1])
             self.assertEqual(command[command.index("--thinking") + 1], "high")
-            self.assertEqual(
-                driver.profile_id, "pi-minimal-system-inline-artifact-thinking-v1"
-            )
+            self.assertNotIn("profile", config_text)
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(
@@ -167,10 +165,7 @@ class PiDriverTests(unittest.TestCase):
 
             self.assertEqual(command[command.index("--thinking") + 1], "off")
             self.assertIn(request.prompt_text, command[-1])
-            self.assertEqual(
-                driver.profile_id,
-                "pi-minimal-system-inline-artifact-no-thinking-v1",
-            )
+            self.assertFalse(hasattr(driver, "profile_id"))
 
 
 class OpenCodeDriverTests(unittest.TestCase):
@@ -180,8 +175,6 @@ class OpenCodeDriverTests(unittest.TestCase):
             driver = OpenCodeDriver(
                 base_url="http://127.0.0.1:58000/v1",
                 api_key_environment="VLLM_API_KEY",
-                temperature=0.6,
-                top_p=0.95,
                 thinking_enabled=False,
             )
 
@@ -193,7 +186,7 @@ class OpenCodeDriverTests(unittest.TestCase):
             config_text = config_paths[0].read_text()
             config = json.loads(config_text)
             agent = config["agent"]["benchmark"]
-            provider = config["provider"]["vllm-local"]
+            provider = config["provider"]["openai-compatible"]
             model = provider["models"]["qwen3.6-coder"]
 
             self.assertEqual(agent["mode"], "primary")
@@ -226,15 +219,15 @@ class OpenCodeDriverTests(unittest.TestCase):
             self.assertEqual(command[command.index("--dir") + 1], "/workspace")
             self.assertEqual(
                 command[command.index("--model") + 1],
-                "vllm-local/qwen3.6-coder",
+                "openai-compatible/qwen3.6-coder",
             )
             self.assertEqual(command[command.index("--agent") + 1], "benchmark")
             self.assertTrue(command[-1].startswith(INLINE_ARTIFACT_INSTRUCTION))
             self.assertIn(request.prompt_text, command[-1])
             self.assertNotIn("Read /workspace/TASK.md", command[-1])
-            self.assertEqual(
-                driver.profile_id, "opencode-inline-artifact-no-thinking-v1"
-            )
+            self.assertNotIn("temperature", config_text)
+            self.assertNotIn("top_p", config_text)
+            self.assertNotIn("profile", config_text)
             self.assertNotIn(SECRET, " ".join(command))
 
             self.assertIn(
@@ -250,7 +243,7 @@ class OpenCodeDriverTests(unittest.TestCase):
         )
 
         for driver in drivers:
-            with self.subTest(driver=driver.profile_id):
+            with self.subTest(driver=type(driver).__name__):
                 self.assertIsNone(driver.parse_event("not-json"))
                 self.assertEqual(
                     driver.parse_event('{"type":"agent_start"}'),
@@ -294,8 +287,9 @@ class OpenCodeDriverTests(unittest.TestCase):
                 '{"type":"tool_use","part":{"state":{"status":"running"}}}'
             )
         )
-        self.assertIsNone(
-            opencode.classify_budget_event('{"type":"step_finish"}')
+        self.assertEqual(
+            opencode.classify_budget_event('{"type":"step_finish"}'),
+            "turn",
         )
 
 

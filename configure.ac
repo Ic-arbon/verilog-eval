@@ -68,80 +68,30 @@ AS_CASE([${generator}],
   [model|agent], [],
   [AC_MSG_ERROR([--with-generator must be model or agent])])
 
-AC_SUBST([generator])
+AS_CASE([${generator}],
+  [model], [selected_generator="${srcdir}/scripts/sv-generate"],
+  [agent], [selected_generator="${srcdir}/scripts/sv-agent-generate"])
+
+AC_SUBST([selected_generator])
 AC_MSG_NOTICE([using generator: ${generator}])
 
-AC_ARG_WITH(agent,
-  AS_HELP_STRING([--with-agent],[External Agent: pi or opencode]),
-  [agent="${with_agent}"],
-  [agent="opencode"])
+AC_ARG_WITH(generator-config,
+  AS_HELP_STRING([--with-generator-config],[Opaque producer configuration reference]),
+  [generator_config="${with_generator_config}"],
+  [generator_config=""])
 
-AS_CASE([${agent}],
-  [pi|opencode], [],
-  [AC_MSG_ERROR([--with-agent must be pi or opencode])])
-
-AC_SUBST([agent])
-AC_MSG_NOTICE([using Agent: ${agent}])
-
-AC_ARG_WITH(agent-timeout,
-  AS_HELP_STRING([--with-agent-timeout],[Agent wall timeout in seconds]),
-  [agent_timeout="${with_agent_timeout}"],
-  [agent_timeout=300])
-AC_SUBST([agent_timeout])
-
-AC_ARG_WITH(agent-max-turns,
-  AS_HELP_STRING([--with-agent-max-turns],[Maximum Agent turns]),
-  [agent_max_turns="${with_agent_max_turns}"],
-  [agent_max_turns=20])
-AC_SUBST([agent_max_turns])
-
-AC_ARG_WITH(agent-max-tool-calls,
-  AS_HELP_STRING([--with-agent-max-tool-calls],[Maximum Agent tool calls]),
-  [agent_max_tool_calls="${with_agent_max_tool_calls}"],
-  [agent_max_tool_calls=50])
-AC_SUBST([agent_max_tool_calls])
-
-AC_ARG_WITH(agent-max-input-tokens,
-  AS_HELP_STRING([--with-agent-max-input-tokens],[Maximum Agent input context tokens]),
-  [agent_max_input_tokens="${with_agent_max_input_tokens}"],
-  [agent_max_input_tokens=16384])
-AC_SUBST([agent_max_input_tokens])
-
-AS_IF([test "${agent_timeout}" -ge 1 2>/dev/null], [],
-  [AC_MSG_ERROR([Agent budgets must be positive integers])])
-AS_IF([test "${agent_max_turns}" -ge 1 2>/dev/null], [],
-  [AC_MSG_ERROR([Agent budgets must be positive integers])])
-AS_IF([test "${agent_max_tool_calls}" -ge 1 2>/dev/null], [],
-  [AC_MSG_ERROR([Agent budgets must be positive integers])])
-AS_IF([test "${agent_max_input_tokens}" -ge 1 2>/dev/null], [],
-  [AC_MSG_ERROR([Agent budgets must be positive integers])])
-
-AC_ARG_WITH(agent-thinking,
-  AS_HELP_STRING([--with-agent-thinking],[Enable request-level Agent thinking: on or off]),
-  [agent_thinking="${with_agent_thinking}"],
-  [agent_thinking=on])
-
-AS_CASE([${agent_thinking}],
-  [on|off], [],
-  [AC_MSG_ERROR([--with-agent-thinking must be on or off])])
-AC_SUBST([agent_thinking])
-
-AC_ARG_WITH(agent-tool-profile,
-  AS_HELP_STRING([--with-agent-tool-profile],[Agent tool profile: base or rtl]),
-  [agent_tool_profile="${with_agent_tool_profile}"],
-  [agent_tool_profile=base])
-
-AS_CASE([${agent_tool_profile}],
-  [base|rtl], [],
-  [AC_MSG_ERROR([--with-agent-tool-profile must be base or rtl])])
-AC_SUBST([agent_tool_profile])
-
-AC_MSG_NOTICE([using Agent timeout: ${agent_timeout}])
-AC_MSG_NOTICE([using Agent max turns: ${agent_max_turns}])
-AC_MSG_NOTICE([using Agent max tool calls: ${agent_max_tool_calls}])
-AC_MSG_NOTICE([using Agent max input tokens: ${agent_max_input_tokens}])
-AC_MSG_NOTICE([using Agent thinking: ${agent_thinking}])
-AC_MSG_NOTICE([using Agent tool profile: ${agent_tool_profile}])
+AS_IF([test "${generator}" = agent], [
+  AS_IF([test -z "${generator_config}"],
+    [AC_MSG_ERROR([Agent generator requires --with-generator-config])])
+  AS_CASE([${generator_config}],
+    [/*], [],
+    [AC_MSG_ERROR([Generator configuration reference must be absolute])])
+  AS_IF([test -L "${generator_config}" || test ! -f "${generator_config}"],
+    [AC_MSG_ERROR([Generator configuration reference is not a real regular file])])
+], [
+  AS_IF([test -n "${generator_config}"],
+    [AC_MSG_ERROR([Model generator does not accept --with-generator-config])])
+])
 
 #-------------------------------------------------------------------------
 # --with-examples
@@ -269,7 +219,7 @@ problems = \
 END
 
 sed -e '/^\s*$/d' -e 's/^\(.*\)$/  \1 \\/' \
-    ${problems_file} >> problems.mk
+    -- "${problems_file}" >> problems.mk
 
 echo "" >> problems.mk
 
@@ -289,7 +239,7 @@ cat > samples.mk \
 END
 
 sed -e '/^\s*$/d' -e "s/^\(.*\)$/\1_num_samples =  ${samples}/" \
-    ${problems_file} | column -t >> samples.mk
+    -- "${problems_file}" | column -t >> samples.mk
 
 echo "" >> samples.mk
 
@@ -326,6 +276,51 @@ AS_IF([ test "${pregen_en}" = "yes" ],
   AC_MSG_NOTICE([using pregen: ${with_pregen}])
   cp -r ${with_pregen}/* .
 ])
+
+#-------------------------------------------------------------------------
+# selected generator static argv
+#-------------------------------------------------------------------------
+
+AC_MSG_NOTICE([creating .generator-args])
+
+args_tmp=".generator-args.tmp.$$"
+rm -f -- "${args_tmp}"
+umask 077
+
+AS_IF([test "${generator}" = agent], [
+  printf '%s\0' \
+    "--run-config=${generator_config}" \
+    >"${args_tmp}" \
+    || AC_MSG_ERROR([Could not write generator arguments])
+], [
+  AS_IF([test "${rules}" = yes], [
+    printf '%s\0' \
+      "--model=${model}" \
+      "--examples=${examples}" \
+      "--rules" \
+      "--task=${task}" \
+      "--max-tokens=${max_tokens}" \
+      "--temperature=${temperature}" \
+      "--top-p=${top_p}" \
+      >"${args_tmp}" \
+      || AC_MSG_ERROR([Could not write generator arguments])
+  ], [
+    printf '%s\0' \
+      "--model=${model}" \
+      "--examples=${examples}" \
+      "--task=${task}" \
+      "--max-tokens=${max_tokens}" \
+      "--temperature=${temperature}" \
+      "--top-p=${top_p}" \
+      >"${args_tmp}" \
+      || AC_MSG_ERROR([Could not write generator arguments])
+  ])
+])
+
+chmod 600 "${args_tmp}" \
+  || AC_MSG_ERROR([Could not protect generator arguments])
+mv -f -- "${args_tmp}" .generator-args \
+  || AC_MSG_ERROR([Could not publish generator arguments])
 
 #-------------------------------------------------------------------------
 # Output

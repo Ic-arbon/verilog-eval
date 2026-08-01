@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
+for program in nix nix-store grep; do command -v "$program" >/dev/null || exit 2; done
+scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-launcher.XXXXXX")"
+trap 'rm -rf "$scratch"' EXIT INT TERM
+link="$scratch/agent-eval"
+nix build "path:$root#agent-eval" --out-link "$link"
+launcher="$link/bin/verilog-agent-eval"
+test -x "$launcher"
+grep -q 'scripts/run-agent-evaluation' "$launcher"
+grep -q 'python3.*-I' "$launcher"
+if grep -E 'npm|agent-tools-setup|curl|/health|exec make|configure' "$launcher"; then
+  echo "formal launcher contains forbidden orchestration/setup edge" >&2
+  exit 1
+fi
+if nix-store -qR "$link" | grep 'verilog-agent-tools-setup'; then
+  echo "formal launcher closure contains setup application" >&2
+  exit 1
+fi
+VERILOG_EVAL_ROOT="$root" nix run "path:$root#agent-eval" -- --help >"$scratch/help"
+grep -q -- '--with-agent' "$scratch/help"
+grep -q -- '--resume' "$scratch/help"
+echo "nix Agent launcher smoke passed"

@@ -250,7 +250,14 @@ class CredentialBroker:
             ),
             daemon=True,
         )
-        self._process.start()
+        original_environment = dict(os.environ)
+        try:
+            os.environ.clear()
+            os.environ.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
+            self._process.start()
+        finally:
+            os.environ.clear()
+            os.environ.update(original_environment)
         child_connection.close()
         try:
             if not parent_connection.poll(5):

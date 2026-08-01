@@ -20,6 +20,11 @@ class RecordingRunner:
 
     def __call__(self, command, **kwargs):
         self.calls.append((tuple(command), kwargs))
+        if len(command) > 1 and command[1] == "run":
+            cidfile = Path(command[command.index("--cidfile") + 1])
+            cidfile.write_text("abcdef1234567890\n")
+        if tuple(command[1:3]) == ("container", "inspect"):
+            return subprocess.CompletedProcess(command, 1, stdout="", stderr="not found")
         return subprocess.CompletedProcess(
             command,
             self.returncode,
@@ -141,7 +146,8 @@ class DockerExecutorTests(unittest.TestCase):
                     self.assertEqual(result.stdout, "trajectory\n")
                     self.assertEqual(result.stderr, "diagnostic\n")
                     self.assertIsNone(result.usage.input_tokens)
-                    self.assertEqual(len(runner.calls), 1)
+                    self.assertEqual(len(runner.calls), 2)
+                    self.assertEqual(runner.calls[1][0][1:3], ("container", "inspect"))
                     self.assertFalse(
                         Path(
                             runner.calls[0][0][runner.calls[0][0].index("--cidfile") + 1]
@@ -188,6 +194,12 @@ class DockerExecutorTests(unittest.TestCase):
             fake_docker.write_text(
                 "#!/bin/sh\n"
                 "if [ \"$1\" = rm ]; then exit 0; fi\n"
+                "if [ \"$1\" = container ]; then echo 'not found' >&2; exit 1; fi\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                "  if [ \"$previous\" = --cidfile ]; then printf 'abcdef1234567890\\n' >\"$argument\"; fi\n"
+                "  previous=\"$argument\"\n"
+                "done\n"
                 "printf '{\"type\":\"turn_end\"}\\n'\n"
                 "printf '{\"type\":\"turn_end\"}\\n'\n"
                 "sleep 30\n"
@@ -218,9 +230,17 @@ class DockerExecutorTests(unittest.TestCase):
 
             self.assertLess(time.monotonic() - started, 5)
             self.assertEqual(result.status, "error")
-            self.assertEqual(result.exit_code, 125)
+            self.assertEqual(result.exit_code, 86)
             self.assertEqual(result.termination_reason, "max_turns")
             self.assertEqual(result.stdout, '{"type":"compact"}\n' * 2)
+
+    def test_docker_control_plane_exit_is_infrastructure_not_sample_error(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = RecordingRunner(returncode=125, stderr="daemon failure")
+            executor, spec, _tools = self.make_fixture(Path(tmp), runner=runner)
+
+            with self.assertRaises(DockerInfrastructureError):
+                executor.run(spec)
 
     def test_missing_inherited_secret_fails_before_docker_starts(self):
         with tempfile.TemporaryDirectory() as tmp:

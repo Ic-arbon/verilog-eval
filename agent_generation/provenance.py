@@ -39,7 +39,7 @@ def digest_agent_tools(root: Path) -> str:
         entries.extend(current / name for name in file_names)
     entries.sort(key=lambda path: path.relative_to(resolved_root).as_posix())
 
-    digest = hashlib.sha256(b"verilog-eval-agent-tools-v1\0")
+    digest = hashlib.sha256(b"verilog-eval-agent-tools\0")
     for path in entries:
         relative = path.relative_to(resolved_root).as_posix().encode("utf-8")
         metadata = path.lstat()

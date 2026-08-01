@@ -20,6 +20,7 @@ from agent_generation.contracts import (
     AgentUsage,
     ProcessResult,
 )
+from agent_generation.result_contract import HOST_BUDGET_EXIT_CODES
 
 
 CONTAINER_ID_PATTERN = re.compile(r"[0-9a-f]{12,64}")
@@ -193,14 +194,35 @@ class DockerExecutor:
         command.extend(spec.command)
         return tuple(command)
 
-    def _container_identifier(self, cidfile: Path, container_name: str) -> str:
+    def _container_identifier(self, cidfile: Path) -> str:
         try:
             container_id = cidfile.read_text(encoding="utf-8").strip()
-        except OSError:
-            container_id = ""
-        if CONTAINER_ID_PATTERN.fullmatch(container_id):
-            return container_id
-        return container_name
+        except OSError as error:
+            raise DockerInfrastructureError(
+                "Docker did not confirm container launch"
+            ) from error
+        if CONTAINER_ID_PATTERN.fullmatch(container_id) is None:
+            raise DockerInfrastructureError("Docker returned an invalid container ID")
+        return container_id
+
+    def _confirm_removed(self, identifier: str) -> None:
+        try:
+            completed = self.runner(
+                (self.docker_path, "container", "inspect", identifier),
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env=self.host_environment,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise DockerInfrastructureError(
+                f"cannot confirm container cleanup: {error}"
+            ) from error
+        message = _decode_output(completed.stderr).lower()
+        if completed.returncode == 0 or not (
+            "no such" in message or "not found" in message
+        ):
+            raise DockerInfrastructureError("container cleanup was not confirmed")
 
     def _force_remove(self, identifier: str) -> None:
         try:
@@ -209,6 +231,7 @@ class DockerExecutor:
                 capture_output=True,
                 text=True,
                 timeout=30,
+                env=self.host_environment,
             )
         except (OSError, subprocess.SubprocessError) as error:
             raise DockerInfrastructureError(
@@ -284,6 +307,7 @@ class DockerExecutor:
                 text=True,
                 bufsize=1,
                 start_new_session=True,
+                env=self.host_environment,
             )
         except OSError as error:
             raise DockerInfrastructureError(
@@ -332,11 +356,31 @@ class DockerExecutor:
                 ended_streams += 1
                 continue
             if label == "stdout":
-                stdout_lines.append(
-                    _normalize_trajectory_line(line, spec.trajectory_normalizer)
-                )
+                try:
+                    stdout_lines.append(
+                        _normalize_trajectory_line(line, spec.trajectory_normalizer)
+                    )
+                except BaseException as error:
+                    identifier = self._container_identifier(cidfile)
+                    try:
+                        self._force_remove(identifier)
+                    finally:
+                        self._stop_client_process(process)
+                    raise DockerInfrastructureError(
+                        "Agent trajectory normalization failed"
+                    ) from error
                 if spec.event_classifier is not None:
-                    event_kind = spec.event_classifier(line)
+                    try:
+                        event_kind = spec.event_classifier(line)
+                    except BaseException as error:
+                        identifier = self._container_identifier(cidfile)
+                        try:
+                            self._force_remove(identifier)
+                        finally:
+                            self._stop_client_process(process)
+                        raise DockerInfrastructureError(
+                            "Agent budget event classifier failed"
+                        ) from error
                     if event_kind is not None and event_kind not in BUDGET_EVENT_KINDS:
                         termination_reason = "max_turns"
                         stderr_lines.append(
@@ -360,13 +404,19 @@ class DockerExecutor:
                 stderr_lines.append(line)
 
         if termination_reason is not None:
-            identifier = self._container_identifier(cidfile, container_name)
+            identifier = self._container_identifier(cidfile)
             try:
                 self._force_remove(identifier)
             finally:
                 self._stop_client_process(process)
         else:
             process.wait()
+            identifier = self._container_identifier(cidfile)
+            if process.returncode in {125, 126, 127}:
+                raise DockerInfrastructureError(
+                    f"Docker control plane exited {process.returncode}"
+                )
+            self._confirm_removed(identifier)
 
         for reader in readers:
             reader.join(timeout=1)
@@ -389,7 +439,7 @@ class DockerExecutor:
                 termination_reason="timeout",
             )
         if termination_reason is not None:
-            exit_code = 125 if termination_reason == "max_turns" else 126
+            exit_code = HOST_BUDGET_EXIT_CODES[termination_reason]
             stderr_lines.append(
                 f"VERILOG_EVAL_AGENT_TERMINATED: {termination_reason}\n"
             )
@@ -425,9 +475,10 @@ class DockerExecutor:
                 capture_output=True,
                 text=True,
                 timeout=spec.timeout_seconds,
+                env=self.host_environment,
             )
         except subprocess.TimeoutExpired as error:
-            identifier = self._container_identifier(cidfile, container_name)
+            identifier = self._container_identifier(cidfile)
             self._force_remove(identifier)
             return ProcessResult(
                 status="timeout",
@@ -446,6 +497,12 @@ class DockerExecutor:
                 f"failed to execute Docker: {error}"
             ) from error
 
+        identifier = self._container_identifier(cidfile)
+        if completed.returncode in {125, 126, 127}:
+            raise DockerInfrastructureError(
+                f"Docker control plane exited {completed.returncode}"
+            )
+        self._confirm_removed(identifier)
         return ProcessResult(
             status="completed" if completed.returncode == 0 else "error",
             exit_code=completed.returncode,

@@ -9,11 +9,13 @@ from pathlib import Path
 from agent_generation.run import (
     PreparationEvidence,
     RunnerError,
+    acknowledge_run_path,
     assert_clean_source,
     collect_input_manifest,
     collect_preparation_evidence,
     configure_environment,
     docker_environment,
+    execute_prepared_run,
     make_environment,
     manage_recovery,
     parse_runner_options,
@@ -336,6 +338,7 @@ class RunPreparationTests(unittest.TestCase):
             runtime_bindings={
                 "source_root": str(root / "source"),
                 "dataset_dir": str(root / "source/dataset_spec-to-rtl"),
+                "problems_file": str(root / "source/dataset_spec-to-rtl/problems.txt"),
                 "build_dir": str(root / "build"),
                 "docker": {
                     "client": str(root / "bin/docker"),
@@ -377,6 +380,26 @@ class RunPreparationTests(unittest.TestCase):
             self.assertEqual(first.bindings["run_config_sha256"], first.digest)
             self.assertFalse(first.config_path.with_name("runtime-bindings.json").exists())
 
+    def test_new_run_path_file_and_stdout_acknowledge_recovery_in_order(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            import io
+            import json
+
+            root = Path(tmp)
+            path_file = root / "run-path.txt"
+            options = self.options(root, "--new-run", f"--run-path-file={path_file}")
+            prepared = prepare_run(options, self.evidence(root), credential="secret")
+            stream = io.StringIO()
+
+            acknowledge_run_path(prepared, options, stream=stream)
+
+            self.assertEqual(path_file.read_text(), str(prepared.config_path.parent) + "\n")
+            self.assertEqual(stream.getvalue(), str(prepared.config_path.parent) + "\n")
+            receipt = json.loads(
+                (root / "runs/.recoveries" / f"{prepared.digest}.json").read_text()
+            )
+            self.assertTrue(receipt["acknowledged"])
+
     def test_new_run_has_nonce_and_durable_unacknowledged_receipt(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -411,6 +434,147 @@ class RunPreparationTests(unittest.TestCase):
             changed.tools_content_sha256 = "f" * 64
             with self.assertRaises(RunnerError):
                 prepare_run(resumed_options, changed, credential="secret")
+
+
+class RunExecutionTests(unittest.TestCase):
+    def prepared_fixture(self, root: Path):
+        helper = RunPreparationTests()
+        options = helper.options(root)
+        prepared = prepare_run(options, helper.evidence(root), credential="secret")
+        return options, prepared
+
+    def test_runner_invokes_configure_and_make_once_then_reports_after_broker_stop(self):
+        from agent_generation.contracts import AgentUsage, ProcessResult
+        from agent_generation.sample_result import commit_sample_bundle
+        from tests.test_agent_sample_result import limits, runtime
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            options, prepared = self.prepared_fixture(root)
+            source = Path(prepared.bindings["source_root"])
+            source.mkdir(parents=True)
+            configure = source / "configure"
+            configure.write_text("#!/bin/sh\nexit 0\n")
+            configure.chmod(0o755)
+            events = []
+
+            class Broker:
+                def __init__(self, **_kwargs):
+                    pass
+
+                def __enter__(self):
+                    events.append("broker_started")
+                    return self
+
+                def __exit__(self, *_args):
+                    self_path = prepared.config_path.parent / "agent-summary.json"
+                    if self_path.exists():
+                        raise AssertionError("report marker preceded broker shutdown")
+                    events.append("broker_stopped")
+
+            calls = []
+
+            def command_runner(command, **kwargs):
+                calls.append((tuple(command), kwargs))
+                self.assertTrue(
+                    prepared.config_path.with_name("runtime-bindings.json").is_file()
+                )
+                if Path(command[0]).name == "make":
+                    events.append("make")
+                    run = Path(kwargs["cwd"])
+                    sample_id = "Prob001_zero_sample01"
+                    workspace = run / "fake-workspace"
+                    workspace.mkdir()
+                    (workspace / "TopModule.sv").write_text(
+                        "module TopModule; endmodule\n"
+                    )
+                    commit_sample_bundle(
+                        workspace=workspace,
+                        output_path=run / "Prob001_zero" / f"{sample_id}.sv",
+                        sample_id=sample_id,
+                        agent="opencode",
+                        model="qwen3.6-coder",
+                        run_config_sha256=prepared.digest,
+                        process=ProcessResult(
+                            status="completed",
+                            exit_code=0,
+                            duration_seconds=1,
+                            stdout="",
+                            stderr="",
+                            usage=AgentUsage(
+                                input_tokens=None,
+                                output_tokens=None,
+                                turns=0,
+                                tool_calls=0,
+                                usage_source="trajectory",
+                            ),
+                        ),
+                        limits=limits(),
+                        runtime={
+                            "source_revision": prepared.config["runtime"]["source_commit"],
+                            "docker_image_id": prepared.config["runtime"]["docker_image_id"],
+                            "docker_daemon_identity": prepared.config["runtime"]["docker_daemon_identity"],
+                            "agent_tools_content_sha256": prepared.config["runtime"]["agent_tools"]["content_sha256"],
+                            "endpoint_base_url": prepared.config["endpoint"]["base_url"],
+                            "endpoint_evidence_sha256": prepared.endpoint_evidence["response_sha256"],
+                        },
+                    )
+                    (run / "summary.csv").write_text(
+                        "Prob001_zero,1,1,1.0,.\n"
+                    )
+                return subprocess.CompletedProcess(command, 0)
+
+            report_path = execute_prepared_run(
+                prepared,
+                options,
+                command_runner=command_runner,
+                broker_factory=Broker,
+            )
+
+            self.assertEqual([Path(call[0][0]).name for call in calls], ["configure", "make"])
+            recorded_argv = " ".join(
+                argument for call in calls for argument in call[0]
+            )
+            self.assertNotIn("sv-agent-generate", recorded_argv)
+            self.assertEqual(events, ["broker_started", "make", "broker_stopped"])
+            self.assertEqual(report_path, prepared.config_path.parent / "agent-summary.json")
+            self.assertTrue(report_path.is_file())
+            self.assertFalse(prepared.config_path.with_name("runtime-bindings.json").exists())
+            self.assertNotIn("OPENAI_API_KEY", calls[0][1]["env"])
+            self.assertNotIn("OPENAI_API_KEY", calls[1][1]["env"])
+            self.assertTrue(
+                prepared.config_path.with_name("agent-summary.txt").is_file()
+            )
+            self.assertTrue(prepared.config_path.with_name("summary.csv").is_file())
+
+    def test_make_failure_leaves_no_report_marker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            options, prepared = self.prepared_fixture(root)
+            source = Path(prepared.bindings["source_root"])
+            source.mkdir(parents=True)
+            configure = source / "configure"
+            configure.write_text("#!/bin/sh\nexit 0\n")
+            configure.chmod(0o755)
+
+            class Broker:
+                def __init__(self, **_kwargs): pass
+                def __enter__(self): return self
+                def __exit__(self, *_args): pass
+
+            def runner(command, **_kwargs):
+                code = 7 if Path(command[0]).name == "make" else 0
+                return subprocess.CompletedProcess(command, code)
+
+            with self.assertRaises(RunnerError):
+                execute_prepared_run(
+                    prepared,
+                    options,
+                    command_runner=runner,
+                    broker_factory=Broker,
+                )
+            self.assertFalse((prepared.config_path.parent / "agent-summary.json").exists())
+            self.assertFalse(prepared.config_path.with_name("runtime-bindings.json").exists())
 
 
 class ClosedEnvironmentTests(unittest.TestCase):

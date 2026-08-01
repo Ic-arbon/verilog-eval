@@ -1,0 +1,14 @@
+No complete test file is deleted in Step 5.
+
+Atomic Step-4 replacements already removed obsolete assertions in place:
+
+- tests/test_agent_configure.py -> generic generator-config/NUL argv assertions
+- tests/test_agent_generation_contract.py -> immutable request/nullable usage only;
+  candidate publication moved to tests/test_agent_sample_result.py
+- tests/test_agent_reporting.py -> unnumbered hash-valid bundle join
+- tests/test_sv_agent_generate.py -> narrow immutable-config adapter
+- tests/test_agent_flake.py -> thin launcher and semantic image tags
+- tests/test_agent_isolation_smoke.py -> content-addressed runner smokes
+- tests/test_generator_reachability.py -> post-cutover single-runtime graph
+
+Step 5 deletion allowlist: empty.

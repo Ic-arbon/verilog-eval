@@ -7,133 +7,91 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from agent_generation.contracts import AgentUsage, ProcessResult
 from agent_generation.report import ReportError, build_agent_report, write_agent_report
+from agent_generation.sample_result import commit_sample_bundle
+from tests.test_agent_sample_result import limits, runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
-REPORT_SCRIPT = ROOT / "scripts" / "sv-agent-analyze"
-SCHEMA_VERSION = "agent-generation/v1"
+REPORT_SCRIPT = ROOT / "scripts/sv-agent-analyze"
+DIGEST = "a" * 64
 
 
-def write_manifest(
-    root: Path,
-    *,
-    problem: str,
-    sample_number: int,
-    execution_status: str,
-    submission_status: str,
-    input_tokens,
-    output_tokens,
-    turns,
-    tool_calls,
-) -> None:
-    sample_id = f"{problem}_sample{sample_number:02d}"
-    path = root / problem / f"{sample_id}-generation.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": SCHEMA_VERSION,
-                "sample_id": sample_id,
-                "producer": {
-                    "kind": "agent",
-                    "agent": "fake",
-                    "profile": "fake-v1",
-                    "model": "qwen3.6-coder",
-                },
-                "execution": {
-                    "status": execution_status,
-                    "exit_code": 0 if execution_status == "completed" else 124,
-                    "duration_seconds": float(sample_number),
-                    "termination_reason": (
-                        "timeout" if execution_status == "timeout" else None
-                    ),
-                },
-                "limits": {
-                    "timeout_seconds": 300,
-                    "max_turns": 20,
-                    "max_tool_calls": 50,
-                    "max_input_tokens": 16384,
-                    "per_call_max_tokens": 8192,
-                },
-                "submission": {
-                    "status": submission_status,
-                    "sha256": "a" * 64 if submission_status == "published" else None,
-                    "size_bytes": 64 if submission_status == "published" else None,
-                },
-                "runtime": {
-                    "source_revision": "1" * 40,
-                    "source_diff_sha256": "2" * 64,
-                    "docker_image": "verilog-eval-agent-sandbox:v1",
-                    "docker_image_id": "sha256:" + "3" * 64,
-                    "agent_tools_versions": "pi=0.82.1 opencode=1.18.7",
-                    "agent_tools_lock_sha256": "4" * 64,
-                    "agent_tools_content_sha256": "5" * 64,
-                    "api_base_url": "http://127.0.0.1:58000/v1",
-                },
-                "usage": {
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "turns": turns,
-                    "tool_calls": tool_calls,
-                    "usage_source": (
-                        "trajectory" if input_tokens is not None else "unavailable"
-                    ),
-                },
-            }
+def process(status: str, sample_number: int, *, known_usage: bool) -> ProcessResult:
+    if status == "completed":
+        exit_code, reason = 0, None
+    elif status == "timeout":
+        exit_code, reason = 124, "timeout"
+    else:
+        exit_code, reason = 9, None
+    usage = (
+        AgentUsage(
+            input_tokens=sample_number * 100,
+            output_tokens=sample_number * 10,
+            turns=sample_number,
+            tool_calls=sample_number - 1,
+            usage_source="trajectory",
         )
-        + "\n"
+        if known_usage
+        else AgentUsage.unavailable()
+    )
+    return ProcessResult(
+        status=status,
+        exit_code=exit_code,
+        duration_seconds=float(sample_number),
+        stdout="trajectory\n",
+        stderr="",
+        usage=usage,
+        termination_reason=reason,
     )
 
 
-class AgentReportingTests(unittest.TestCase):
-    def make_mixed_run(self, root: Path) -> Path:
-        summary = root / "summary.csv"
-        summary.write_text("Prob001_zero,1,3,0.333333, .CS\n".replace(" ", ""))
-        write_manifest(
-            root,
-            problem="Prob001_zero",
-            sample_number=1,
-            execution_status="completed",
-            submission_status="published",
-            input_tokens=100,
-            output_tokens=20,
-            turns=2,
-            tool_calls=1,
+def make_mixed_run(root: Path) -> Path:
+    summary = root / "summary.csv"
+    summary.write_text("Prob001_zero,1,3,0.33,.CS\n")
+    for number, (status, candidate, known) in enumerate(
+        (
+            ("completed", "module TopModule; endmodule\n", True),
+            ("timeout", "module TopModule; endmodule\n", True),
+            ("error", None, False),
+        ),
+        1,
+    ):
+        workspace = root / f"workspace-{number}"
+        workspace.mkdir()
+        if candidate is not None:
+            (workspace / "TopModule.sv").write_text(candidate)
+        sample_id = f"Prob001_zero_sample{number:02d}"
+        commit_sample_bundle(
+            workspace=workspace,
+            output_path=root / "Prob001_zero" / f"{sample_id}.sv",
+            sample_id=sample_id,
+            agent="pi",
+            model="qwen3.6-coder",
+            run_config_sha256=DIGEST,
+            process=process(status, number, known_usage=known),
+            limits=limits(),
+            runtime=runtime(),
         )
-        write_manifest(
-            root,
-            problem="Prob001_zero",
-            sample_number=2,
-            execution_status="timeout",
-            submission_status="published",
-            input_tokens=200,
-            output_tokens=30,
-            turns=3,
-            tool_calls=2,
-        )
-        write_manifest(
-            root,
-            problem="Prob001_zero",
-            sample_number=3,
-            execution_status="error",
-            submission_status="missing",
-            input_tokens=None,
-            output_tokens=None,
-            turns=None,
-            tool_calls=None,
-        )
-        return summary
+    return summary
 
+
+class AgentReportingTests(unittest.TestCase):
     def test_report_keeps_correctness_execution_and_submission_separate(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            report = build_agent_report(self.make_mixed_run(root))
+            report = build_agent_report(
+                make_mixed_run(root),
+                run_config_sha256=DIGEST,
+                expected_problems=("Prob001_zero",),
+                expected_samples_per_problem=3,
+            )
 
-            self.assertEqual(report["schema_version"], "agent-evaluation/v1")
+            self.assertNotIn("schema_version", report)
+            self.assertEqual(report["run_config_sha256"], DIGEST)
             self.assertEqual(report["correctness"]["samples"], 3)
             self.assertEqual(report["correctness"]["passed"], 1)
-            self.assertAlmostEqual(report["correctness"]["pass_rate"], 1 / 3)
             self.assertEqual(
                 report["execution"]["status_counts"],
                 {"completed": 1, "error": 1, "timeout": 1},
@@ -144,23 +102,14 @@ class AgentReportingTests(unittest.TestCase):
             )
             self.assertEqual(report["submission"]["conditional_passed"], 1)
             self.assertEqual(report["submission"]["conditional_pass_rate"], 0.5)
-            self.assertEqual(report["samples"][1]["execution"]["status"], "timeout")
-            self.assertEqual(
-                report["samples"][1]["execution"]["termination_reason"], "timeout"
-            )
             self.assertFalse(report["samples"][1]["correctness"]["passed"])
             self.assertEqual(report["samples"][1]["submission"]["status"], "published")
-            self.assertEqual(report["samples"][0]["limits"]["max_input_tokens"], 16384)
-            self.assertEqual(
-                report["samples"][0]["runtime"]["docker_image_id"],
-                "sha256:" + "3" * 64,
-            )
 
     def test_unknown_usage_is_explicit_and_never_fabricated_as_zero(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            report = build_agent_report(self.make_mixed_run(root))
-
+            report = build_agent_report(
+                make_mixed_run(Path(tmp)), run_config_sha256=DIGEST
+            )
             input_tokens = report["usage"]["input_tokens"]
             total_tokens = report["usage"]["total_tokens"]
             self.assertIsNone(input_tokens["value"])
@@ -168,78 +117,44 @@ class AgentReportingTests(unittest.TestCase):
             self.assertEqual(input_tokens["known_samples"], 2)
             self.assertEqual(input_tokens["unknown_samples"], 1)
             self.assertIsNone(total_tokens["value"])
-            self.assertEqual(total_tokens["known_sum"], 350)
+            self.assertEqual(total_tokens["known_sum"], 330)
 
-    def test_report_writes_machine_and_human_outputs(self):
+    def test_report_writes_text_first_and_json_completion_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            report = build_agent_report(self.make_mixed_run(root))
+            summary = make_mixed_run(root)
+            report = build_agent_report(summary, run_config_sha256=DIGEST)
             json_path = root / "agent-summary.json"
             text_path = root / "agent-summary.txt"
 
-            write_agent_report(report, json_path=json_path, text_path=text_path)
+            committed = write_agent_report(
+                report,
+                summary_csv=summary,
+                run_config_sha256=DIGEST,
+                json_path=json_path,
+                text_path=text_path,
+            )
 
-            self.assertEqual(json.loads(json_path.read_text()), report)
+            self.assertEqual(json.loads(json_path.read_text()), committed)
+            self.assertEqual(committed["evidence"]["run_config_sha256"], DIGEST)
             text = text_path.read_text()
             self.assertIn("Verilog Pass@1: 1/3 (33.33%)", text)
-            self.assertIn("Execution: completed=1 error=1 timeout=1", text)
-            self.assertIn("Submission: missing=1 published=2", text)
             self.assertIn("Input tokens: unavailable", text)
 
-    def test_report_cli_writes_both_outputs(self):
-        self.assertTrue(REPORT_SCRIPT.is_file())
-        self.assertTrue(os.access(REPORT_SCRIPT, os.X_OK))
+    def test_exact_expected_problem_set_and_bundle_hashes_fail_closed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            summary = self.make_mixed_run(root)
-            json_path = root / "out.json"
-            text_path = root / "out.txt"
-
-            result = subprocess.run(
-                (
-                    str(REPORT_SCRIPT),
-                    f"--summary-csv={summary}",
-                    f"--output-json={json_path}",
-                    f"--output-text={text_path}",
-                ),
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(
-                json.loads(json_path.read_text())["correctness"]["passed"], 1
-            )
-            self.assertIn("Verilog Pass@1", text_path.read_text())
-
-    def test_missing_or_inconsistent_manifest_fails_closed(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            summary = root / "summary.csv"
-            summary.write_text("Prob001_zero,1,1,1.0,.\n")
-
+            summary = make_mixed_run(root)
             with self.assertRaises(ReportError):
-                build_agent_report(summary)
-
-            write_manifest(
-                root,
-                problem="Prob001_zero",
-                sample_number=1,
-                execution_status="completed",
-                submission_status="published",
-                input_tokens=1,
-                output_tokens=1,
-                turns=1,
-                tool_calls=1,
-            )
-            manifest = next(root.glob("*/*-generation.json"))
-            data = json.loads(manifest.read_text())
-            data["sample_id"] = "wrong-sample"
-            manifest.write_text(json.dumps(data))
-
+                build_agent_report(
+                    summary,
+                    run_config_sha256=DIGEST,
+                    expected_problems=("Prob999_extra",),
+                )
+            candidate = root / "Prob001_zero/Prob001_zero_sample01.sv"
+            candidate.write_text("tampered\n")
             with self.assertRaises(ReportError):
-                build_agent_report(summary)
+                build_agent_report(summary, run_config_sha256=DIGEST)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+if ! command -v autoconf >/dev/null 2>&1; then
+  echo "autoconf must come from the pinned development shell" >&2
+  exit 2
+fi
+
+autoconf
+python3 - <<'PY'
+from pathlib import Path
+path = Path("configure")
+path.write_bytes(path.read_bytes().rstrip() + b"\n")
+PY
+rm -rf autom4te.cache configure~

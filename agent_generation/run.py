@@ -14,15 +14,25 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping, Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
+from agent_generation.credentials import CredentialBroker, CredentialError
 from agent_generation.endpoint import preflight_endpoint
 from agent_generation.lifecycle import (
     abandon_recovery,
+    acknowledge_recovery,
     lifecycle_lock,
     list_recovery_receipts,
     publish_recovery_receipt,
+    run_lock,
     synthesize_orphan_recovery_receipts,
+)
+from agent_generation.report import (
+    ReportError,
+    ReportTransactionError,
+    build_agent_report,
+    validate_report_pair,
+    write_agent_report,
 )
 from agent_generation.provenance import (
     AgentToolsError,
@@ -35,7 +45,13 @@ from agent_generation.run_config import (
     load_run_config,
     publish_run_config,
 )
-from agent_generation.runtime_bindings import validate_runtime_bindings
+from agent_generation.runtime_bindings import (
+    RuntimeBindingError,
+    publish_runtime_bindings,
+    remove_runtime_bindings,
+    validate_runtime_bindings,
+)
+from agent_generation.sample_result import SampleInfrastructureError, validate_sample_bundle
 from agent_generation.task import selected_rules
 from agent_generation.tools import ToolsProjectionError, project_agent_tools
 
@@ -289,6 +305,28 @@ def parse_runner_options(
         parser.error("examples must be a non-negative integer")
     if material["examples"] != 0:
         parser.error("Agent examples are not implemented; use --with-examples=0")
+    credential_environment = material["api_key_environment"]
+    if (
+        credential_environment.startswith(("GIT_", "PYTHON", "DYLD_", "NPM_"))
+        or credential_environment.endswith("_PROXY")
+        or credential_environment
+        in {
+        "PATH",
+        "HOME",
+        "SHELL",
+        "LANG",
+        "LC_ALL",
+        "DOCKER_HOST",
+        "PYTHONPATH",
+        "BASH_ENV",
+        "ENV",
+        "NODE_OPTIONS",
+        "VERILOG_EVAL_JOBS",
+        "VERILOG_EVAL_ROOT",
+        "AGENT_EVAL_AGENT_TOOLS",
+        }
+    ):
+        parser.error("credential environment name collides with structural runtime state")
 
     def locator(argument, environment_name: str) -> Optional[Path]:
         if argument is not None:
@@ -296,18 +334,31 @@ def parse_runner_options(
         value = environ.get(environment_name)
         return Path(value).resolve() if value else None
 
+    source_root = locator(namespace.source_root, "VERILOG_EVAL_ROOT")
+    build_root = locator(namespace.build_root, "VERILOG_EVAL_BUILD_ROOT")
+    if build_root is None and source_root is not None and mode != "resume":
+        build_root = source_root / "build"
+
     return RunnerOptions(
         mode=mode,
         resume_config=resume_config,
         jobs=resolved_jobs,
-        source_root=locator(namespace.source_root, "VERILOG_EVAL_ROOT"),
+        source_root=source_root,
         dataset_dir=locator(namespace.dataset_dir, "VERILOG_EVAL_DATASET"),
         problems_file=locator(namespace.problems_file, "VERILOG_EVAL_PROBLEMS"),
-        build_root=locator(namespace.build_root, "VERILOG_EVAL_BUILD_ROOT"),
+        build_root=build_root,
         agent_tools=locator(namespace.agent_tools, "AGENT_EVAL_AGENT_TOOLS"),
         docker_path=locator(namespace.docker_path, "AGENT_EVAL_DOCKER"),
-        docker_image=namespace.docker_image,
-        docker_archive=locator(namespace.docker_archive, "AGENT_EVAL_DOCKER_ARCHIVE"),
+        docker_image=(
+            namespace.docker_image
+            or environ.get(
+                f"AGENT_EVAL_DOCKER_IMAGE_{str(material['toolset']).upper()}"
+            )
+        ),
+        docker_archive=locator(
+            namespace.docker_archive,
+            f"AGENT_EVAL_DOCKER_ARCHIVE_{str(material['toolset']).upper()}",
+        ),
         run_path_file=(namespace.run_path_file.resolve() if namespace.run_path_file else None),
         management_action=management_action,
         recovery_digest=recovery_digest,
@@ -369,7 +420,11 @@ def _under(path: Path, roots: tuple[Path, ...]) -> bool:
             path.relative_to(root)
             return True
         except ValueError:
-            continue
+            try:
+                root.relative_to(path)
+                return True
+            except ValueError:
+                continue
     return False
 
 
@@ -383,10 +438,16 @@ def assert_clean_source(
 
     root = Path(source_root).resolve(strict=True)
     allowed = tuple(Path(path).resolve(strict=False) for path in allowed_roots)
+    git_executable = git_path
+    if not Path(git_path).is_absolute():
+        located_git = shutil.which(git_path)
+        if located_git is None:
+            raise RunnerError("Git executable is unavailable")
+        git_executable = located_git
     try:
         result = subprocess.run(
             (
-                git_path,
+                git_executable,
                 "-C",
                 str(root),
                 "status",
@@ -397,6 +458,14 @@ def assert_clean_source(
             ),
             capture_output=True,
             check=False,
+            env={
+                "PATH": str(Path(git_executable).parent),
+                "HOME": "/nonexistent",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+            },
         )
     except OSError as error:
         raise RunnerError(f"cannot inspect source tree: {error}") from error
@@ -645,13 +714,31 @@ def collect_preparation_evidence(
 
     executables = {
         "python": Path(sys.executable).resolve(strict=True),
-        "bash": _resolved_executable("bash", explicit=None, path_environment=path_environment),
-        "make": _resolved_executable("make", explicit=None, path_environment=path_environment),
-        "iverilog": _resolved_executable("iverilog", explicit=None, path_environment=path_environment),
-        "timeout": _resolved_executable("timeout", explicit=None, path_environment=path_environment),
         "docker": docker_path,
         "git": git_path,
     }
+    for executable_name in (
+        "bash",
+        "make",
+        "iverilog",
+        "timeout",
+        "column",
+        "sed",
+        "seq",
+        "expr",
+        "tee",
+        "mkdir",
+        "rm",
+        "cp",
+        "chmod",
+        "mv",
+        "grep",
+    ):
+        executables[executable_name] = _resolved_executable(
+            executable_name,
+            explicit=None,
+            path_environment=path_environment,
+        )
     try:
         toolchain_identities = tuple(
             executable_identity(name, path)
@@ -663,9 +750,13 @@ def collect_preparation_evidence(
     support_paths: dict[str, Path] = {}
     if environ.get("SSL_CERT_FILE"):
         support_paths["ca-bundle"] = Path(environ["SSL_CERT_FILE"]).resolve(strict=True)
-    resolver = Path("/etc/resolv.conf")
-    if resolver.exists():
-        support_paths["resolver"] = resolver
+    for support_name, support_path in (
+        ("docker-hosts", Path("/etc/hosts")),
+        ("docker-hostname", Path("/etc/hostname")),
+        ("docker-resolver", Path("/etc/resolv.conf")),
+    ):
+        if support_path.exists():
+            support_paths[support_name] = support_path
     try:
         support_identities = tuple(
             support_file_identity(name, path)
@@ -716,6 +807,7 @@ def collect_preparation_evidence(
     runtime_bindings = {
         "source_root": str(source),
         "dataset_dir": str(dataset.resolve(strict=True)),
+        "problems_file": str(Path(problems_file).resolve(strict=True)),
         "build_dir": str(build_root.resolve()),
         "docker": {
             "client": str(docker_path),
@@ -724,7 +816,7 @@ def collect_preparation_evidence(
             "archive": str(archive),
         },
         "tools_projection": str(projection.path),
-        "toolchain": {name: str(path) for name, path in executables.items() if name != "python"},
+        "toolchain": {name: str(path) for name, path in executables.items()},
         "support_files": support_bindings,
         "credential_broker": ".credential.sock",
     }
@@ -913,3 +1005,440 @@ def docker_environment(*, docker_host: str, path: str) -> dict[str, str]:
     result = _base_environment(path)
     result["DOCKER_HOST"] = docker_host
     return result
+
+
+def _canonical_evidence(value: Mapping) -> bytes:
+    try:
+        text = json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as error:
+        raise RunnerError(f"endpoint evidence is not canonical JSON: {error}") from error
+    return (text + "\n").encode("utf-8")
+
+
+def _publish_endpoint_evidence(prepared: PreparedRun) -> Path:
+    path = prepared.config_path.with_name("endpoint-evidence.json")
+    content = _canonical_evidence(prepared.endpoint_evidence)
+    if path.exists() or path.is_symlink():
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+            try:
+                metadata = os.fstat(descriptor)
+                existing = os.read(descriptor, 1024 * 1024 + 1)
+            finally:
+                os.close(descriptor)
+        except OSError as error:
+            raise RunnerError("existing endpoint evidence is unsafe") from error
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or existing != content
+        ):
+            raise RunnerError("existing endpoint evidence does not match preflight")
+        return path
+    directory = os.open(
+        path.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    temporary = f".{path.name}.{secrets.token_hex(8)}.tmp"
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory,
+        )
+        try:
+            offset = 0
+            while offset < len(content):
+                offset += os.write(descriptor, content[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(
+            temporary,
+            path.name,
+            src_dir_fd=directory,
+            dst_dir_fd=directory,
+            follow_symlinks=False,
+        )
+        os.fsync(directory)
+    except OSError as error:
+        raise RunnerError(f"cannot publish endpoint evidence: {error}") from error
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        os.close(directory)
+    return path
+
+
+def _pinned_path(bindings: Mapping) -> str:
+    directories = {
+        str(Path(path).parent)
+        for path in bindings["toolchain"].values()
+    }
+    directories.add(str(Path(bindings["docker"]["client"]).parent))
+    return os.pathsep.join(sorted(directories))
+
+
+def _expected_sample_ids(config: Mapping) -> tuple[str, ...]:
+    return tuple(
+        f"{problem}_sample{sample_number:02d}"
+        for problem in config["benchmark"]["problems"]
+        for sample_number in range(1, config["benchmark"]["samples"] + 1)
+    )
+
+
+def _validate_existing_bundles(prepared: PreparedRun) -> None:
+    run_dir = prepared.config_path.parent
+    for sample_id in _expected_sample_ids(prepared.config):
+        problem = sample_id.rsplit("_sample", 1)[0]
+        output = run_dir / problem / f"{sample_id}.sv"
+        if output.exists() or output.is_symlink():
+            try:
+                validate_sample_bundle(output, prepared.digest)
+            except SampleInfrastructureError as error:
+                raise RunnerError(f"existing Sample Bundle is corrupt: {sample_id}") from error
+
+
+def _remove_empty_runtime_directory(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or any(path.iterdir())
+    ):
+        raise RunnerError(f"runtime directory is unsafe or nonempty: {path.name}")
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.rmdir(path.name, dir_fd=directory)
+        os.fsync(directory)
+    except OSError as error:
+        raise RunnerError(f"cannot remove runtime directory: {path.name}") from error
+    finally:
+        os.close(directory)
+
+
+def _remove_regular_marker(path: Path) -> None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(metadata.st_mode):
+        raise RunnerError("existing report marker is nonregular")
+    directory = os.open(path.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.unlink(path.name, dir_fd=directory)
+        os.fsync(directory)
+    except OSError as error:
+        raise RunnerError("cannot clear stale report marker") from error
+    finally:
+        os.close(directory)
+
+
+def _complete_report(prepared: PreparedRun) -> Optional[Path]:
+    run_dir = prepared.config_path.parent
+    marker = run_dir / "agent-summary.json"
+    text = run_dir / "agent-summary.txt"
+    summary = run_dir / "summary.csv"
+    if not marker.exists() and not marker.is_symlink():
+        return None
+    try:
+        committed = validate_report_pair(
+            summary,
+            marker,
+            text,
+            prepared.digest,
+        )
+        rebuilt = build_agent_report(
+            summary,
+            run_config_sha256=prepared.digest,
+            expected_problems=prepared.config["benchmark"]["problems"],
+            expected_samples_per_problem=prepared.config["benchmark"]["samples"],
+            expected_config=prepared.config,
+            endpoint_evidence_sha256=prepared.endpoint_evidence["response_sha256"],
+        )
+    except (ReportError, ReportTransactionError):
+        _remove_regular_marker(marker)
+        return None
+    payload = dict(committed)
+    payload.pop("evidence", None)
+    if payload != rebuilt:
+        raise RunnerError("existing completed report does not match current bundles")
+    return marker
+
+
+def _invoke_process(
+    command_runner: Callable,
+    command: Sequence[str],
+    *,
+    cwd: Path,
+    environment: Mapping[str, str],
+) -> None:
+    try:
+        completed = command_runner(
+            tuple(command),
+            cwd=str(cwd),
+            env=dict(environment),
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise RunnerError(f"cannot execute {Path(command[0]).name}") from error
+    if completed.returncode != 0:
+        raise RunnerError(
+            f"{Path(command[0]).name} returned nonzero: {completed.returncode}"
+        )
+
+
+def execute_prepared_run(
+    prepared: PreparedRun,
+    options: RunnerOptions,
+    *,
+    command_runner: Callable = subprocess.run,
+    broker_factory: Callable = CredentialBroker,
+) -> Path:
+    """Hold one run lock while configure and GNU Make execute exactly once."""
+
+    run_dir = prepared.config_path.parent
+    with run_lock(run_dir):
+        existing = _complete_report(prepared)
+        if existing is not None:
+            return existing
+        _validate_existing_bundles(prepared)
+        _remove_regular_marker(run_dir / "agent-summary.json")
+        _publish_endpoint_evidence(prepared)
+        try:
+            publish_runtime_bindings(prepared.config_path, prepared.bindings)
+        except RuntimeBindingError as error:
+            raise RunnerError(f"cannot publish runtime bindings: {error}") from error
+
+        bindings = prepared.bindings
+        pinned_path = _pinned_path(bindings)
+        configure_home = run_dir / ".configure-home"
+        configure_home.mkdir(mode=0o700, exist_ok=True)
+        configure_env = configure_environment(
+            {
+                "PATH": pinned_path,
+                "SHELL": bindings["toolchain"]["bash"],
+            },
+            home=str(configure_home),
+        )
+        make_env = make_environment(
+            {
+                "PATH": pinned_path,
+                "SHELL": bindings["toolchain"]["bash"],
+            }
+        )
+        configure_command = [
+            str(Path(bindings["source_root"]) / "configure"),
+            "--with-generator=agent",
+            f"--with-generator-config={prepared.config_path}",
+            f"--with-task={prepared.config['benchmark']['task']}",
+            f"--with-samples={prepared.config['benchmark']['samples']}",
+            f"--with-examples={prepared.config['benchmark']['examples']}",
+            f"--with-dataset={bindings['dataset_dir']}",
+            f"--with-problems={bindings['problems_file']}",
+        ]
+        if prepared.config["benchmark"]["rules"]:
+            configure_command.append("--with-rules")
+        try:
+            _invoke_process(
+                command_runner,
+                configure_command,
+                cwd=run_dir,
+                environment=configure_env,
+            )
+            with broker_factory(
+                run_dir=run_dir,
+                config_digest=prepared.digest,
+                environment_name=prepared.config["endpoint"]["api_key_environment"],
+                secret=prepared.credential,
+                expected_sample_ids=_expected_sample_ids(prepared.config),
+            ):
+                _invoke_process(
+                    command_runner,
+                    (
+                        bindings["toolchain"]["make"],
+                        f"--jobs={prepared.config['jobs']}",
+                        f"SHELL={bindings['toolchain']['bash']}",
+                    ),
+                    cwd=run_dir,
+                    environment=make_env,
+                )
+        finally:
+            _remove_empty_runtime_directory(configure_home)
+            _remove_empty_runtime_directory(run_dir / ".agent-work")
+            try:
+                remove_runtime_bindings(prepared.config_path)
+            except RuntimeBindingError as error:
+                raise RunnerError(f"runtime bindings cleanup failed: {error}") from error
+
+        summary = run_dir / "summary.csv"
+        report = build_agent_report(
+            summary,
+            run_config_sha256=prepared.digest,
+            expected_problems=prepared.config["benchmark"]["problems"],
+            expected_samples_per_problem=prepared.config["benchmark"]["samples"],
+            expected_config=prepared.config,
+            endpoint_evidence_sha256=prepared.endpoint_evidence["response_sha256"],
+        )
+        marker = run_dir / "agent-summary.json"
+        write_agent_report(
+            report,
+            summary_csv=summary,
+            run_config_sha256=prepared.digest,
+            json_path=marker,
+            text_path=run_dir / "agent-summary.txt",
+        )
+        validate_report_pair(
+            summary,
+            marker,
+            run_dir / "agent-summary.txt",
+            prepared.digest,
+        )
+        return marker
+
+
+def _write_run_path_file(path: Path, content: bytes) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        metadata = target.lstat()
+    except FileNotFoundError:
+        metadata = None
+    if metadata is not None and (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_size != 0
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+    ):
+        raise RunnerError("run path file may replace only an owned empty mode-0600 file")
+    directory = os.open(
+        target.parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    temporary = f".{target.name}.{secrets.token_hex(8)}.tmp"
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=directory,
+        )
+        try:
+            offset = 0
+            while offset < len(content):
+                offset += os.write(descriptor, content[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(
+            temporary,
+            target.name,
+            src_dir_fd=directory,
+            dst_dir_fd=directory,
+        )
+        os.fsync(directory)
+    except OSError as error:
+        raise RunnerError(f"cannot publish run path file: {error}") from error
+    finally:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        os.close(directory)
+
+
+def acknowledge_run_path(
+    prepared: PreparedRun,
+    options: RunnerOptions,
+    *,
+    stream=None,
+) -> None:
+    """Durably deliver the run path, then acknowledge any nonce receipt."""
+
+    output = sys.stdout if stream is None else stream
+    content = (str(prepared.config_path.parent) + "\n").encode("utf-8")
+    if options.run_path_file is not None:
+        _write_run_path_file(options.run_path_file, content)
+    try:
+        output.write(content.decode("utf-8"))
+        output.flush()
+    except (OSError, UnicodeError) as error:
+        raise RunnerError("cannot acknowledge run path on stdout") from error
+    if prepared.config["nonce"] is not None:
+        build_root = prepared.config_path.parent.parent
+        synthesize_orphan_recovery_receipts(build_root)
+        acknowledge_recovery(build_root, prepared.digest)
+
+
+def main(
+    argv: Optional[Sequence[str]] = None,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> int:
+    """Prepare, acknowledge, and execute one complete Agent evaluation run."""
+
+    environ = dict(os.environ if environment is None else environment)
+    try:
+        options = parse_runner_options(argv, environment=environ)
+        if options.management_action == "contamination":
+            source = options.source_root
+            if source is None:
+                raise RunnerError("contamination check requires a source root")
+            allowed = tuple(
+                path
+                for path in (options.build_root, options.agent_tools)
+                if path is not None
+            )
+            assert_clean_source(source, allowed_roots=allowed)
+            return 0
+        if options.management_action in {"list", "abandon", "resume"}:
+            result = manage_recovery(options)
+            if options.management_action == "list":
+                print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+                return 0
+            if options.management_action == "abandon":
+                print(result)
+                return 0
+            config_path = Path(result)
+            config = load_run_config(config_path)
+            prepared = PreparedRun(
+                config_path=config_path,
+                config=config,
+                digest=config_path.parent.name,
+                bindings={},
+                endpoint_evidence={},
+                credential="",
+            )
+            acknowledge_run_path(prepared, options)
+            return 0
+
+        evidence, credential = collect_preparation_evidence(
+            options,
+            environment=environ,
+        )
+        prepared = prepare_run(options, evidence, credential=credential)
+        acknowledge_run_path(prepared, options)
+        marker = execute_prepared_run(prepared, options)
+        print(marker)
+        return 0
+    except (RunnerError, CredentialError, ReportError, ReportTransactionError) as error:
+        print(f"ERROR: Agent evaluation infrastructure failed: {error}", file=sys.stderr)
+        return 3
+    except (ValueError, OSError) as error:
+        print(f"ERROR: invalid Agent evaluation request: {error}", file=sys.stderr)
+        return 2

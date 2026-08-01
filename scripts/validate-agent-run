@@ -1,0 +1,169 @@
+#!/usr/bin/env python3
+"""Validate one complete content-addressed Agent run and all evidence hashes."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from agent_generation.report import (  # noqa: E402
+    ReportError,
+    ReportTransactionError,
+    build_agent_report,
+    validate_report_pair,
+)
+from agent_generation.run_config import RunConfigError, load_run_config  # noqa: E402
+
+
+def parser() -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser()
+    value.add_argument("--expected-samples", type=int, required=True)
+    value.add_argument("run_dir", type=Path)
+    return value
+
+
+def _assert_owned_tree(run: Path, config: dict) -> None:
+    required_root = {
+        ".generator-args",
+        ".run.lock",
+        "Makefile",
+        "agent-summary.json",
+        "agent-summary.txt",
+        "config.log",
+        "config.status",
+        "endpoint-evidence.json",
+        "problems.mk",
+        "run-config.json",
+        "samples.mk",
+        "summary.csv",
+        "summary.txt",
+    }
+    problem_names = set(config["benchmark"]["problems"])
+    actual_root = {entry.name for entry in os.scandir(run)}
+    if actual_root != required_root | problem_names:
+        raise ValueError(
+            "run root entries differ from the exact completed-run contract"
+        )
+    for entry in os.scandir(run):
+        metadata = entry.stat(follow_symlinks=False)
+        if metadata.st_uid != os.geteuid() or stat.S_ISLNK(metadata.st_mode):
+            raise ValueError(f"run entry is not owned no-follow evidence: {entry.name}")
+        if entry.name in problem_names:
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError(f"problem entry is not a directory: {entry.name}")
+        elif not stat.S_ISREG(metadata.st_mode):
+            raise ValueError(f"run evidence entry is not regular: {entry.name}")
+
+    sample_count = config["benchmark"]["samples"]
+    for problem in config["benchmark"]["problems"]:
+        required: set[str] = set()
+        optional: set[str] = set()
+        for number in range(1, sample_count + 1):
+            sample = f"{problem}_sample{number:02d}"
+            required.update(
+                {
+                    f".{sample}.lock",
+                    f"{sample}.sv",
+                    f"{sample}-generation.json",
+                    f"{sample}-trajectory.jsonl",
+                    f"{sample}-stderr.log",
+                    f"{sample}-sv-generate.log",
+                    f"{sample}-sv-iv-test.log",
+                }
+            )
+            optional.add(sample)
+        directory = run / problem
+        actual = {entry.name for entry in os.scandir(directory)}
+        if not required.issubset(actual) or actual - required - optional:
+            raise ValueError(f"problem evidence differs from contract: {problem}")
+        for entry in os.scandir(directory):
+            metadata = entry.stat(follow_symlinks=False)
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_nlink != 1
+            ):
+                raise ValueError(f"sample evidence is unsafe: {problem}/{entry.name}")
+
+
+def main() -> int:
+    arguments = parser().parse_args()
+    try:
+        run = arguments.run_dir.resolve(strict=True)
+        config_path = run / "run-config.json"
+        config = load_run_config(config_path)
+        if arguments.expected_samples <= 0:
+            raise ValueError("expected sample count must be positive")
+        expected_count = (
+            len(config["benchmark"]["problems"])
+            * config["benchmark"]["samples"]
+        )
+        if expected_count != arguments.expected_samples:
+            raise ValueError("run config sample count does not match expectation")
+        if (run / "runtime-bindings.json").exists():
+            raise ValueError("completed run retains ephemeral runtime bindings")
+        if (run / ".credential.sock").exists():
+            raise ValueError("completed run retains credential socket")
+        _assert_owned_tree(run, config)
+        evidence_bytes = (run / "endpoint-evidence.json").read_bytes()
+        evidence = json.loads(evidence_bytes.decode("utf-8"))
+        canonical_evidence = (
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode("utf-8")
+        if evidence_bytes != canonical_evidence:
+            raise ValueError("endpoint evidence is not canonical")
+        response_digest = evidence.get("response_sha256")
+        if not isinstance(response_digest, str):
+            raise ValueError("endpoint evidence response digest is missing")
+        summary = run / "summary.csv"
+        rebuilt = build_agent_report(
+            summary,
+            run_config_sha256=run.name,
+            expected_problems=config["benchmark"]["problems"],
+            expected_samples_per_problem=config["benchmark"]["samples"],
+            expected_config=config,
+            endpoint_evidence_sha256=response_digest,
+        )
+        marker = validate_report_pair(
+            summary,
+            run / "agent-summary.json",
+            run / "agent-summary.txt",
+            run.name,
+        )
+        payload = dict(marker)
+        payload.pop("evidence", None)
+        if payload != rebuilt or len(rebuilt["samples"]) != arguments.expected_samples:
+            raise ValueError("report marker does not equal rebuilt exact report")
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        ValueError,
+        RunConfigError,
+        ReportError,
+        ReportTransactionError,
+    ) as error:
+        print(f"ERROR: invalid Agent run: {error}", file=sys.stderr)
+        return 2
+    print(
+        json.dumps(
+            {
+                "run": str(run),
+                "samples": len(rebuilt["samples"]),
+                "passed": rebuilt["correctness"]["passed"],
+            },
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

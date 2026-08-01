@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agent_generation.report_transaction import (
+from agent_generation.report import (
     ReportTransactionError,
     commit_report_pair,
     validate_report_pair,
@@ -95,7 +95,7 @@ class ReportTransactionTests(unittest.TestCase):
             first_mtime = json_path.stat().st_mtime_ns
             second = commit_report_pair(
                 report(),
-                text="different text is ignored for completed pair\n",
+                text="complete\n",
                 summary_csv=summary,
                 run_config_sha256=DIGEST,
                 json_path=json_path,
@@ -103,6 +103,15 @@ class ReportTransactionTests(unittest.TestCase):
             )
             self.assertEqual(first, second)
             self.assertEqual(json_path.stat().st_mtime_ns, first_mtime)
+            with self.assertRaises(ReportTransactionError):
+                commit_report_pair(
+                    report(),
+                    text="different text must not replace a completed pair\n",
+                    summary_csv=summary,
+                    run_config_sha256=DIGEST,
+                    json_path=json_path,
+                    text_path=text_path,
+                )
 
             text_path.write_text("tampered\n")
             with self.assertRaises(ReportTransactionError):

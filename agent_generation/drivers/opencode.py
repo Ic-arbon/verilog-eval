@@ -11,7 +11,6 @@ from agent_generation.drivers._common import (
     parse_json_object,
     validate_base_url,
     validate_environment_name,
-    validate_sampling,
     workspace_environment,
     write_json,
 )
@@ -22,7 +21,7 @@ from agent_generation.drivers.base import (
 
 
 OPENCODE_BINARY = "/agent-tools/node_modules/.bin/opencode"
-OPENCODE_PROVIDER = "vllm-local"
+OPENCODE_PROVIDER = "openai-compatible"
 OPENCODE_CONFIG = "/workspace/.agent-config/opencode.json"
 
 
@@ -32,19 +31,11 @@ class OpenCodeDriver:
 
     base_url: str
     api_key_environment: str = "OPENAI_API_KEY"
-    temperature: float = 0.6
-    top_p: float = 0.95
     thinking_enabled: bool = True
 
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
-        validate_sampling(self.temperature, self.top_p)
-
-    @property
-    def profile_id(self) -> str:
-        suffix = "thinking" if self.thinking_enabled else "no-thinking"
-        return f"opencode-inline-artifact-{suffix}-v1"
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_path = request.workspace / ".agent-config" / "opencode.json"
@@ -56,8 +47,6 @@ class OpenCodeDriver:
                     "description": "Complete one isolated artifact benchmark.",
                     "mode": "primary",
                     "model": f"{OPENCODE_PROVIDER}/{request.model}",
-                    "temperature": self.temperature,
-                    "top_p": self.top_p,
                     "steps": request.max_turns,
                     "prompt": ARTIFACT_INSTRUCTION,
                     "permission": {
@@ -76,7 +65,7 @@ class OpenCodeDriver:
             "provider": {
                 OPENCODE_PROVIDER: {
                     "npm": "@ai-sdk/openai-compatible",
-                    "name": "vLLM Local",
+                    "name": "OpenAI Compatible",
                     "options": {
                         "baseURL": self.base_url,
                         "apiKey": f"{{env:{self.api_key_environment}}}",
@@ -85,7 +74,6 @@ class OpenCodeDriver:
                         request.model: {
                             "name": request.model,
                             "reasoning": True,
-                            "temperature": True,
                             "tool_call": True,
                             "interleaved": {"field": "reasoning_content"},
                             "limit": {
@@ -141,7 +129,11 @@ class OpenCodeDriver:
 
     def classify_budget_event(self, line: str) -> Optional[str]:
         event = self.parse_event(line)
-        if not isinstance(event, dict) or event.get("type") != "tool_use":
+        if not isinstance(event, dict):
+            return None
+        if event.get("type") == "step_finish":
+            return "turn"
+        if event.get("type") != "tool_use":
             return None
         part = event.get("part")
         if not isinstance(part, dict):

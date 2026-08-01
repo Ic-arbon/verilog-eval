@@ -25,13 +25,6 @@ def validate_environment_name(name: str) -> None:
         raise ValueError("api_key_environment is not a valid environment name")
 
 
-def validate_sampling(temperature: float, top_p: float) -> None:
-    if not 0 <= temperature <= 2:
-        raise ValueError("temperature must be between 0 and 2")
-    if not 0 < top_p <= 1:
-        raise ValueError("top_p must be greater than 0 and at most 1")
-
-
 def write_json(path: Path, value: object) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")

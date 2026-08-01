@@ -38,12 +38,43 @@ class ToolsProjection:
     versions: dict[str, str]
 
 
+def _lock_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    value: dict[str, Any] = {}
+    for key, child in pairs:
+        if key in value:
+            raise ToolsProjectionError(f"package lock contains duplicate key: {key}")
+        value[key] = child
+    return value
+
+
 def _load_lock(path: Path) -> tuple[dict[str, Any], bytes]:
+    descriptor = -1
     try:
-        content = path.read_bytes()
-        lock = json.loads(content.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16 * 1024 * 1024:
+            raise ToolsProjectionError("package lock must be a bounded regular file")
+        content = bytearray()
+        while len(content) <= 16 * 1024 * 1024:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, 16 * 1024 * 1024 + 1 - len(content)),
+            )
+            if not block:
+                break
+            content.extend(block)
+        if len(content) > 16 * 1024 * 1024:
+            raise ToolsProjectionError("package lock exceeds bound")
+        raw = bytes(content)
+        lock = json.loads(raw.decode("utf-8"), object_pairs_hook=_lock_object)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
+        if isinstance(error, ToolsProjectionError):
+            raise
         raise ToolsProjectionError(f"cannot read package lock: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    content = raw
     if (
         not isinstance(lock, dict)
         or lock.get("lockfileVersion") not in {2, 3}
@@ -243,9 +274,9 @@ def _make_read_only(root: Path) -> None:
         if stat.S_ISLNK(metadata.st_mode):
             continue
         if stat.S_ISDIR(metadata.st_mode):
-            path.chmod(0o500)
+            path.chmod(0o555)
         else:
-            path.chmod(0o500 if metadata.st_mode & 0o111 else 0o400)
+            path.chmod(0o555 if metadata.st_mode & 0o111 else 0o444)
 
 
 def _bin_map(metadata: dict[str, Any], package_name: str) -> dict[str, str]:
@@ -277,6 +308,22 @@ def _remove_private_tree(path: Path) -> None:
                 child.chmod(0o700)
         current_path.chmod(0o700)
     shutil.rmtree(path)
+
+
+def validate_tools_projection(path: Path, expected_sha256: str) -> None:
+    """Verify a reused projection's exact tree digest and read-only modes."""
+
+    projection = Path(path)
+    if not projection.is_dir() or projection.is_symlink():
+        raise ToolsProjectionError("tools projection must be a real directory")
+    if _digest_tree(projection) != expected_sha256:
+        raise ToolsProjectionError("tools projection content digest mismatch")
+    for current, directories, files in os.walk(projection, followlinks=False):
+        current_path = Path(current)
+        for child in [current_path, *(current_path / name for name in directories + files)]:
+            metadata = child.lstat()
+            if not stat.S_ISLNK(metadata.st_mode) and metadata.st_mode & 0o222:
+                raise ToolsProjectionError("tools projection is unexpectedly writable")
 
 
 def project_agent_tools(
@@ -338,15 +385,23 @@ def project_agent_tools(
         _make_read_only(temporary)
         content_digest = _digest_tree(temporary)
         destination = destination_root / content_digest
-        if destination.exists():
-            if not destination.is_dir() or _digest_tree(destination) != content_digest:
+        if destination.exists() or destination.is_symlink():
+            if (
+                destination.is_symlink()
+                or not destination.is_dir()
+                or _digest_tree(destination) != content_digest
+            ):
                 raise ToolsProjectionError("occupied projection digest is invalid")
             _remove_private_tree(temporary)
         else:
             try:
                 os.rename(temporary, destination)
             except OSError:
-                if not destination.is_dir() or _digest_tree(destination) != content_digest:
+                if (
+                    destination.is_symlink()
+                    or not destination.is_dir()
+                    or _digest_tree(destination) != content_digest
+                ):
                     raise ToolsProjectionError("projection publication race is invalid")
                 _remove_private_tree(temporary)
         directory = os.open(destination_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))

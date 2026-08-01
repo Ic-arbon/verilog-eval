@@ -1,139 +1,84 @@
 from __future__ import annotations
 
-import os
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-CONFIGURE = REPO_ROOT / "configure"
+from tests.test_generator_architecture import ConfiguredGeneratorSeamTests, nul_records
 
 
 class AgentConfigureTests(unittest.TestCase):
-    def configure(self, root: Path, *extra_args: str):
-        fake_bin = root / "bin"
-        build_dir = root / "build"
-        fake_bin.mkdir()
-        build_dir.mkdir()
-        iverilog = fake_bin / "iverilog"
-        iverilog.write_text("#!/bin/sh\nexit 0\n")
-        iverilog.chmod(0o755)
-        problems = root / "problems.txt"
-        problems.write_text("Prob001_zero\n")
-        environment = os.environ.copy()
-        environment["PATH"] = f"{fake_bin}:{environment['PATH']}"
-        result = subprocess.run(
-            [
-                str(CONFIGURE),
-                "--with-model=qwen3.6-coder",
-                "--with-task=spec-to-rtl",
-                "--with-samples=1",
-                f"--with-problems={problems}",
-                *extra_args,
-            ],
-            cwd=build_dir,
-            env=environment,
-            capture_output=True,
-            text=True,
-        )
-        return result, build_dir
+    def configure(self, root: Path, *arguments: str):
+        return ConfiguredGeneratorSeamTests().configure(root, *arguments)
 
-    def evaluated_make_variables(self, build_dir: Path) -> str:
-        result = subprocess.run(
-            [
-                "make",
-                "--no-print-directory",
-                "ECHO=echo",
-                "debug-generator",
-                "debug-GENERATE_VERILOG",
-                "debug-GENERATE_FLAGS",
-            ],
-            cwd=build_dir,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return result.stdout
-
-    def test_default_model_generator_keeps_existing_program_contract(self):
+    def test_default_model_generator_keeps_legacy_static_option_order(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result, build_dir = self.configure(Path(tmp))
-
+            result, build = self.configure(Path(tmp), "--with-model=qwen3.6-coder")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-            variables = self.evaluated_make_variables(build_dir)
-            self.assertIn("generator = model", variables)
-            self.assertIn("scripts/sv-generate", variables)
-            self.assertNotIn("scripts/sv-agent-generate", variables)
-            self.assertNotIn("--agent=", variables)
+            self.assertEqual(
+                nul_records(build / ".generator-args"),
+                [
+                    "--model=qwen3.6-coder",
+                    "--examples=0",
+                    "--task=spec-to-rtl",
+                    "--max-tokens=1024",
+                    "--temperature=0.85",
+                    "--top-p=0.95",
+                ],
+            )
 
-    def test_agent_generator_receives_agent_specific_budgets(self):
+    def test_agent_generator_accepts_only_opaque_config_reference(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result, build_dir = self.configure(
-                Path(tmp),
+            root = Path(tmp)
+            config = root / "run-config.json"
+            config.write_text("{}\n")
+            result, build = self.configure(
+                root,
                 "--with-generator=agent",
-                "--with-agent=opencode",
-                "--with-agent-timeout=240",
-                "--with-agent-max-turns=18",
-                "--with-agent-max-tool-calls=44",
-                "--with-agent-max-input-tokens=16384",
-                "--with-agent-thinking=off",
-                "--with-agent-tool-profile=rtl",
+                f"--with-generator-config={config}",
             )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(
+                nul_records(build / ".generator-args"),
+                [f"--run-config={config}"],
+            )
+            makefile = (build / "Makefile").read_text()
+            for leaked in (
+                "opencode",
+                "pi",
+                "agent-timeout",
+                "agent-thinking",
+                "trajectory",
+                "generation.json",
+                "agent-summary",
+            ):
+                self.assertNotIn(leaked, makefile)
 
-            output = result.stdout + result.stderr
-            self.assertEqual(result.returncode, 0, output)
-            self.assertNotIn("unrecognized options", output)
-            variables = self.evaluated_make_variables(build_dir)
-            self.assertIn("generator = agent", variables)
-            self.assertIn("scripts/sv-agent-generate", variables)
-            self.assertIn("--agent=opencode", variables)
-            self.assertIn("--agent-timeout=240", variables)
-            self.assertIn("--agent-max-turns=18", variables)
-            self.assertIn("--agent-max-tool-calls=44", variables)
-            self.assertIn("--agent-max-input-tokens=16384", variables)
-            self.assertIn("--agent-thinking=off", variables)
-            self.assertIn("--agent-tool-profile=rtl", variables)
-            self.assertIn("--max-tokens=1024", variables)
-
-            makefile = (build_dir / "Makefile").read_text()
-            self.assertIn("_sample%-generation.json", makefile)
-            self.assertIn("_sample%-trajectory.jsonl", makefile)
-            self.assertIn("_sample%-stderr.log", makefile)
-            self.assertIn("$(scripts_dir)/sv-agent-analyze", makefile)
-            self.assertIn("--output-json=agent-summary.json", makefile)
-            self.assertIn("--output-text=agent-summary.txt", makefile)
-
-    def test_invalid_generator_is_rejected_during_configure(self):
+    def test_agent_generator_requires_config_and_rejects_old_agent_options(self):
         with tempfile.TemporaryDirectory() as tmp:
-            result, _build_dir = self.configure(
-                Path(tmp),
-                "--with-generator=transcript-extractor",
-            )
-
+            result, _build = self.configure(Path(tmp), "--with-generator=agent")
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn(
-                "--with-generator must be model or agent",
-                result.stdout + result.stderr,
+            self.assertIn("requires --with-generator-config", result.stdout + result.stderr)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            config = root / "run-config.json"
+            config.write_text("{}\n")
+            result, _build = self.configure(
+                root,
+                "--with-generator=agent",
+                f"--with-generator-config={config}",
+                "--with-agent-timeout=1",
             )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("unrecognized options", result.stdout + result.stderr)
 
-    def test_invalid_agent_budgets_are_rejected_before_make(self):
-        invalid_options = (
-            "--with-agent-timeout=0",
-            "--with-agent-max-turns=not-a-number",
-            "--with-agent-max-tool-calls=-1",
-            "--with-agent-max-input-tokens=0",
-        )
-
-        for option in invalid_options:
-            with self.subTest(option=option), tempfile.TemporaryDirectory() as tmp:
-                result, _build_dir = self.configure(Path(tmp), option)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn(
-                    "Agent budgets must be positive integers",
-                    result.stdout + result.stderr,
-                )
+    def test_invalid_generator_is_rejected(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            result, _build = self.configure(
+                Path(tmp), "--with-generator=transcript-extractor"
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("must be model or agent", result.stdout + result.stderr)
 
 
 if __name__ == "__main__":

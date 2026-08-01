@@ -31,29 +31,6 @@ def _require_optional_nonnegative(name: str, value: Optional[int]) -> None:
         raise ValueError(f"{name} must not be negative")
 
 
-def _require_optional_single_line(name: str, value: Optional[str]) -> None:
-    if value is not None and (not value or any(char in value for char in "\r\n\x00")):
-        raise ValueError(f"{name} must be a non-empty single-line string")
-
-
-@dataclass(frozen=True)
-class RuntimeProvenance:
-    """Non-secret identities for the source, sandbox, endpoint, and Agent tools."""
-
-    source_revision: Optional[str] = None
-    source_diff_sha256: Optional[str] = None
-    docker_image: Optional[str] = None
-    docker_image_id: Optional[str] = None
-    agent_tools_versions: Optional[str] = None
-    agent_tools_lock_sha256: Optional[str] = None
-    agent_tools_content_sha256: Optional[str] = None
-    api_base_url: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        for name, value in self.__dict__.items():
-            _require_optional_single_line(name, value)
-
-
 @dataclass(frozen=True)
 class AgentRunRequest:
     """Public task material and bounded resources for one Agent invocation."""
@@ -183,21 +160,3 @@ class AgentProcessSpec:
         has_limits = self.max_turns is not None or self.max_tool_calls is not None
         if has_limits != (self.event_classifier is not None):
             raise ValueError("budget limits and event_classifier must be supplied together")
-
-
-@dataclass(frozen=True)
-class SubmissionResult:
-    """Result of publishing a workspace artifact to the Make output path."""
-
-    status: str
-    output_path: Path
-    sha256: Optional[str]
-    size_bytes: Optional[int]
-
-
-@dataclass(frozen=True)
-class AgentGenerationResult:
-    """Orthogonal process and formal-submission outcomes for one sample."""
-
-    process: ProcessResult
-    submission: SubmissionResult

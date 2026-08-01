@@ -1,0 +1,160 @@
+#!/usr/bin/env python3
+"""Bounded local OpenAI Chat Completions server for pinned Agent request smokes."""
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+VERILOG = "module TopModule(output zero);\n  assign zero = 1'b0;\nendmodule\n"
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def has_forbidden_sampling(value):
+    if isinstance(value, dict):
+        if {"temperature", "top_p"}.intersection(value):
+            return True
+        return any(has_forbidden_sampling(child) for child in value.values())
+    if isinstance(value, list):
+        return any(has_forbidden_sampling(child) for child in value)
+    return False
+
+
+def tool_call(body):
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        raise ValueError("request has no tools")
+    definitions = {}
+    for entry in tools:
+        if not isinstance(entry, dict):
+            continue
+        function = entry.get("function", entry)
+        if isinstance(function, dict) and isinstance(function.get("name"), str):
+            definitions[function["name"]] = function
+    name = "bash" if "bash" in definitions else "write" if "write" in definitions else None
+    if name is None:
+        raise ValueError(f"request tools cannot publish an artifact: {sorted(definitions)}")
+    definition = definitions[name]
+    schema = definition.get("parameters", {})
+    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+    required = schema.get("required", []) if isinstance(schema, dict) else []
+    arguments = {}
+    if name == "bash":
+        arguments["command"] = "cat > /workspace/TopModule.sv <<'VERILOG'\n" + VERILOG + "VERILOG"
+    else:
+        path_key = "path" if "path" in properties else "filePath" if "filePath" in properties else "path"
+        arguments[path_key] = "/workspace/TopModule.sv"
+        arguments["content"] = VERILOG
+    for field in required:
+        if field in arguments:
+            continue
+        details = properties.get(field, {}) if isinstance(properties, dict) else {}
+        kind = details.get("type") if isinstance(details, dict) else None
+        if kind == "integer": arguments[field] = 10000
+        elif kind == "boolean": arguments[field] = False
+        elif kind == "array": arguments[field] = []
+        elif kind == "object": arguments[field] = {}
+        elif "dir" in field.lower() or "path" in field.lower(): arguments[field] = "/workspace"
+        else: arguments[field] = "publish benchmark artifact"
+    return name, canonical(arguments)
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+    def __init__(self, address, *, model, log_path, fail_first):
+        super().__init__(address, Handler)
+        self.model=model; self.log_path=log_path; self.fail_first=fail_first
+        self.chat_count=0; self.lock=threading.Lock()
+
+    def record(self, value):
+        line=(canonical(value)+"\n").encode()
+        descriptor=os.open(self.log_path, os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_NOFOLLOW, 0o600)
+        try: os.write(descriptor, line); os.fsync(descriptor)
+        finally: os.close(descriptor)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version="HTTP/1.1"
+    server_version="agent-request-smoke"
+    sys_version=""
+    def log_message(self, *_args): pass
+
+    def send_json(self, status, value, *, headers=None):
+        content=canonical(value).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(content)))
+        self.send_header("Connection", "close")
+        for name,value in (headers or {}).items(): self.send_header(name,value)
+        self.end_headers(); self.wfile.write(content)
+
+    def do_GET(self):
+        if self.path != "/v1/models":
+            self.send_json(404,{"error":"not found"}); return
+        self.send_json(200,{"object":"list","data":[{"id":self.server.model,"object":"model"}]})
+
+    def do_POST(self):
+        if self.path != "/v1/chat/completions":
+            self.send_json(404,{"error":"not found"}); return
+        try:
+            length=int(self.headers.get("Content-Length", "-1"))
+            if not 0 <= length <= 8*1024*1024: raise ValueError("invalid body size")
+            body=json.loads(self.rfile.read(length).decode())
+            if not isinstance(body,dict): raise ValueError("body is not an object")
+            if has_forbidden_sampling(body): raise ValueError("Agent request contains forbidden sampling control")
+            with self.server.lock:
+                self.server.chat_count += 1
+                count=self.server.chat_count
+            self.server.record({"request_number":count,"path":self.path,"body":body})
+            if count <= self.server.fail_first:
+                self.send_json(500,{"error":{"message":"intentional retry probe","type":"server_error"}},headers={"Retry-After":"0"})
+                return
+            messages=body.get("messages",[])
+            continued=any(isinstance(message,dict) and message.get("role")=="tool" for message in messages)
+            if continued:
+                message={"role":"assistant","content":"Artifact written and verified."}
+                finish="stop"
+            else:
+                name, arguments=tool_call(body)
+                message={"role":"assistant","content":None,"tool_calls":[{"id":"call_write_artifact","type":"function","function":{"name":name,"arguments":arguments}}]}
+                finish="tool_calls"
+            response={"id":f"chatcmpl-smoke-{count}","object":"chat.completion","created":1,"model":self.server.model,"choices":[{"index":0,"message":message,"finish_reason":finish}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
+            if body.get("stream") is True:
+                self.send_response(200)
+                self.send_header("Content-Type","text/event-stream")
+                self.send_header("Cache-Control","no-cache")
+                self.send_header("Connection","close")
+                self.end_headers()
+                delta=dict(message)
+                chunk={"id":response["id"],"object":"chat.completion.chunk","created":1,"model":self.server.model,"choices":[{"index":0,"delta":delta,"finish_reason":None}]}
+                final={"id":response["id"],"object":"chat.completion.chunk","created":1,"model":self.server.model,"choices":[{"index":0,"delta":{},"finish_reason":finish}],"usage":response["usage"]}
+                for value in (chunk,final): self.wfile.write(b"data: "+canonical(value).encode()+b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n"); self.wfile.flush()
+            else:
+                self.send_json(200,response)
+        except (ValueError,UnicodeDecodeError,json.JSONDecodeError) as error:
+            self.send_json(400,{"error":{"message":str(error),"type":"invalid_request_error"}})
+
+
+def main():
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--model",default="qwen3.6-coder")
+    parser.add_argument("--log",type=Path,required=True)
+    parser.add_argument("--write-base-url",type=Path,required=True)
+    parser.add_argument("--fail-first",type=int,default=0)
+    args=parser.parse_args()
+    if args.fail_first < 0: parser.error("--fail-first must be nonnegative")
+    server=Server(("127.0.0.1",0),model=args.model,log_path=args.log,fail_first=args.fail_first)
+    args.write_base_url.write_text(f"http://127.0.0.1:{server.server_address[1]}/v1\n")
+    os.chmod(args.write_base_url,0o600)
+    try: server.serve_forever()
+    finally: server.server_close()
+
+if __name__=="__main__": main()

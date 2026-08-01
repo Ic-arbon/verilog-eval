@@ -16,6 +16,7 @@ _TOP_FIELDS = {
     "run_config_sha256",
     "source_root",
     "dataset_dir",
+    "problems_file",
     "build_dir",
     "docker",
     "tools_projection",
@@ -70,7 +71,13 @@ def validate_runtime_bindings(
     digest = _text(bindings["run_config_sha256"], "run_config_sha256")
     if _SHA256.fullmatch(digest) is None or digest != expected_config_digest:
         raise RuntimeBindingError("runtime bindings do not match the run config")
-    for field in ("source_root", "dataset_dir", "build_dir", "tools_projection"):
+    for field in (
+        "source_root",
+        "dataset_dir",
+        "problems_file",
+        "build_dir",
+        "tools_projection",
+    ):
         _absolute_path(bindings[field], field)
 
     docker = _exact_mapping(
@@ -156,8 +163,13 @@ def publish_runtime_bindings(
             )
         except FileNotFoundError:
             existing = None
-        if existing is not None and not stat.S_ISREG(existing.st_mode):
-            raise RuntimeBindingError("existing runtime bindings are not regular")
+        if existing is not None and (
+            not stat.S_ISREG(existing.st_mode)
+            or existing.st_uid != os.geteuid()
+            or stat.S_IMODE(existing.st_mode) != 0o600
+            or existing.st_nlink != 1
+        ):
+            raise RuntimeBindingError("existing runtime bindings are unsafe")
 
         descriptor = os.open(
             temporary_name,
@@ -203,8 +215,16 @@ def load_runtime_bindings(run_config_path: Path) -> dict[str, Any]:
             dir_fd=run_descriptor,
         )
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 1024 * 1024:
-            raise RuntimeBindingError("runtime bindings must be a bounded regular file")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size > 1024 * 1024
+        ):
+            raise RuntimeBindingError(
+                "runtime bindings must be a bounded owned mode-0600 regular file"
+            )
         content = b""
         while len(content) <= 1024 * 1024:
             block = os.read(descriptor, min(65536, 1024 * 1024 + 1 - len(content)))
@@ -241,8 +261,13 @@ def remove_runtime_bindings(run_config_path: Path) -> None:
             )
         except FileNotFoundError:
             return
-        if not stat.S_ISREG(metadata.st_mode):
-            raise RuntimeBindingError("runtime bindings removal refused nonregular entry")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise RuntimeBindingError("runtime bindings removal refused unsafe entry")
         os.unlink(_BINDINGS_NAME, dir_fd=run_descriptor)
         os.fsync(run_descriptor)
     except OSError as error:

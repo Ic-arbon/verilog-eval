@@ -1,0 +1,171 @@
+#!/usr/bin/env python3
+"""Invoke a selected generator from validated NUL-separated static argv."""
+
+from __future__ import annotations
+
+import argparse
+import os
+import stat
+import struct
+import sys
+from pathlib import Path
+
+
+class InvocationError(ValueError):
+    pass
+
+
+def _parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--program", required=True)
+    parser.add_argument("--args-file", required=True)
+    parser.add_argument("dynamic", nargs=argparse.REMAINDER)
+    return parser
+
+
+def _validate_program(value: str) -> str:
+    path = Path(value)
+    if path.name not in {"sv-generate", "sv-agent-generate"} or path.parent.name != "scripts":
+        raise InvocationError("generator program is not allowlisted")
+    try:
+        metadata = path.lstat()
+    except OSError as error:
+        raise InvocationError(f"cannot inspect generator program: {error}") from error
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or stat.S_ISLNK(metadata.st_mode)
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_mode & 0o022
+        or not metadata.st_mode & 0o111
+    ):
+        raise InvocationError("generator program must be an owned executable regular file")
+    return str(path)
+
+
+def _read_static_arguments(path_value: str) -> list[str]:
+    path = Path(path_value)
+    if path.name != ".generator-args":
+        raise InvocationError("generator argument filename is not canonical")
+    parent = path.parent if str(path.parent) else Path(".")
+    try:
+        directory_descriptor = os.open(
+            parent,
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        raise InvocationError(f"cannot open generator argument directory: {error}") from error
+    descriptor = -1
+    try:
+        directory_metadata = os.fstat(directory_descriptor)
+        if (
+            not stat.S_ISDIR(directory_metadata.st_mode)
+            or directory_metadata.st_uid != os.geteuid()
+        ):
+            raise InvocationError("generator argument directory is unsafe")
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+        ):
+            raise InvocationError("generator argument file ownership/type/mode is invalid")
+        argument_max = os.sysconf("SC_ARG_MAX")
+        if metadata.st_size <= 1 or metadata.st_size > argument_max:
+            raise InvocationError("generator argument file size is invalid")
+        content = bytearray()
+        while len(content) <= argument_max:
+            block = os.read(descriptor, min(65536, argument_max + 1 - len(content)))
+            if not block:
+                break
+            content.extend(block)
+    except OSError as error:
+        raise InvocationError(f"cannot read generator argument file: {error}") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(directory_descriptor)
+    if not content.endswith(b"\0"):
+        raise InvocationError("generator argument file has no final NUL")
+    raw_records = bytes(content[:-1]).split(b"\0")
+    if (
+        not raw_records
+        or len(raw_records) > 64
+        or any(not record for record in raw_records)
+    ):
+        raise InvocationError("generator argument file has invalid records")
+    try:
+        return [record.decode("utf-8") for record in raw_records]
+    except UnicodeDecodeError as error:
+        raise InvocationError("generator arguments are not UTF-8") from error
+
+
+def _validate_shape(program: str, static: list[str], dynamic: list[str]) -> None:
+    if Path(program).name == "sv-agent-generate":
+        if (
+            len(static) != 1
+            or not static[0].startswith("--run-config=")
+            or not Path(static[0].removeprefix("--run-config=")).is_absolute()
+        ):
+            raise InvocationError("Agent generator static argv contract is invalid")
+    else:
+        expected_prefixes = (
+            "--model=",
+            "--examples=",
+        )
+        if len(static) not in {6, 7} or any(
+            not static[index].startswith(prefix)
+            for index, prefix in enumerate(expected_prefixes)
+        ):
+            raise InvocationError("model generator static argv contract is invalid")
+        tail = static[2:]
+        if tail and tail[0] == "--rules":
+            tail = tail[1:]
+        if len(tail) != 4 or not (
+            tail[0].startswith("--task=")
+            and tail[1].startswith("--max-tokens=")
+            and tail[2].startswith("--temperature=")
+            and tail[3].startswith("--top-p=")
+        ):
+            raise InvocationError("model generator option order is invalid")
+    if len(dynamic) != 4 or dynamic[0:2] != ["--verbose", "--output"]:
+        raise InvocationError("dynamic generator argv contract is invalid")
+    if not dynamic[2] or not dynamic[3]:
+        raise InvocationError("dynamic output and prompt locators must not be empty")
+
+
+def _validate_exec_size(argv: list[str]) -> None:
+    environment = [f"{name}={value}" for name, value in os.environ.items()]
+    byte_count = sum(len(value.encode()) + 1 for value in [*argv, *environment])
+    pointer_bytes = (len(argv) + len(environment) + 2) * struct.calcsize("P")
+    if byte_count + pointer_bytes + 2048 > os.sysconf("SC_ARG_MAX"):
+        raise InvocationError("generator argv and environment exceed execve capacity")
+
+
+def main() -> int:
+    try:
+        arguments = _parser().parse_args()
+        dynamic = arguments.dynamic
+        if dynamic[:1] == ["--"]:
+            dynamic = dynamic[1:]
+        program = _validate_program(arguments.program)
+        static = _read_static_arguments(arguments.args_file)
+        _validate_shape(program, static, dynamic)
+        argv = [program, *static, *dynamic]
+        _validate_exec_size(argv)
+        os.execv(program, argv)
+    except InvocationError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

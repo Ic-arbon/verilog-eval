@@ -6,59 +6,81 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-UNREACHABLE_MODULES = {
-    "agent_generation.run",
-    "agent_generation.runtime_bindings",
-    "agent_generation.endpoint",
-    "agent_generation.credentials",
-    "agent_generation.tools",
-}
-LIVE_FILES = (
-    ROOT / "agent_generation/cli.py",
-    ROOT / "scripts/sv-agent-generate",
-    ROOT / "configure.ac",
-    ROOT / "Makefile.in",
-    ROOT / "flake.nix",
-)
 
 
-def imported_modules(path: Path) -> set[str]:
-    if path.suffix != ".py":
-        return set()
+def imports(path: Path) -> set[str]:
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    modules = set()
+    result = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
+            result.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
-            modules.add(node.module)
-    return modules
+            result.add(node.module)
+    return result
 
 
 class GeneratorReachabilityTests(unittest.TestCase):
-    def test_preparation_modules_are_unreachable_before_atomic_cutover(self):
-        direct_imports = set()
-        live_text = ""
-        for path in LIVE_FILES:
-            live_text += path.read_text(encoding="utf-8") + "\n"
-            direct_imports.update(imported_modules(path))
+    def test_atomic_cutover_has_one_live_runner_and_one_sample_adapter(self):
+        runner_entry = ROOT / "scripts/run-agent-evaluation"
+        sample_entry = ROOT / "scripts/sv-agent-generate"
+        self.assertIn("agent_generation.run", imports(runner_entry))
+        self.assertIn("agent_generation.cli", imports(sample_entry))
+        self.assertIn("agent_generation.sample", imports(ROOT / "agent_generation/cli.py"))
+        self.assertFalse((ROOT / "agent_generation/submission.py").exists())
+        self.assertFalse((ROOT / "agent_generation/report_transaction.py").exists())
 
-        self.assertTrue(UNREACHABLE_MODULES.isdisjoint(direct_imports))
-        for module in UNREACHABLE_MODULES:
-            self.assertNotIn(module, live_text)
-
-    def test_preparation_does_not_invoke_configure_make_report_or_sample(self):
-        source = (ROOT / "agent_generation/run.py").read_text(encoding="utf-8")
+    def test_only_make_facing_cli_can_reach_one_sample_generator(self):
+        run_source = (ROOT / "agent_generation/run.py").read_text()
+        self.assertIn("execute_prepared_run", run_source)
+        self.assertIn("configure_command", run_source)
+        self.assertIn("--jobs=", run_source)
         for forbidden in (
-            "sv-agent-generate",
-            "sv-agent-analyze",
-            "subprocess.run((\"make\"",
-            "subprocess.run((\"./configure\"",
+            "generate_agent_sample(",
             "run_agent_generation(",
-            "build_agent_report(",
+            "sv-agent-generate",
+            "DockerExecutor(",
         ):
             with self.subTest(forbidden=forbidden):
-                self.assertNotIn(forbidden, source)
+                self.assertNotIn(forbidden, run_source)
+
+    def test_old_broad_sample_cli_and_duplicate_transactions_are_absent(self):
+        cli = (ROOT / "agent_generation/cli.py").read_text()
+        for forbidden in (
+            "--temperature",
+            "--top-p",
+            "--agent-timeout",
+            "--agent-thinking",
+            "profile_id",
+            "publish_submission",
+            "write_generation_sidecars",
+        ):
+            self.assertNotIn(forbidden, cli)
+        sample_transaction_definitions = 0
+        report_transaction_definitions = 0
+        for path in (ROOT / "agent_generation").glob("*.py"):
+            source = path.read_text()
+            sample_transaction_definitions += source.count("def commit_sample_bundle(")
+            report_transaction_definitions += source.count("def commit_report_pair(")
+        self.assertEqual(sample_transaction_definitions, 1)
+        self.assertEqual(report_transaction_definitions, 1)
+
+    def test_configure_and_make_know_only_generic_generator_seam(self):
+        configure = (ROOT / "configure.ac").read_text()
+        make = (ROOT / "Makefile.in").read_text()
+        self.assertIn("--with-generator-config", configure)
+        self.assertIn("selected_generator", configure)
+        self.assertIn("GENERATOR_INVOKER", make)
+        for leaked in (
+            "opencode",
+            "agent-timeout",
+            "agent-thinking",
+            "agent-tool-profile",
+            "trajectory",
+            "generation.json",
+            "agent-summary",
+        ):
+            self.assertNotIn(leaked, configure)
+            self.assertNotIn(leaked, make)
 
 
 if __name__ == "__main__":

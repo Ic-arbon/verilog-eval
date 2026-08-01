@@ -13,9 +13,9 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Optional
 
 from agent_generation.contracts import ProcessResult
+from agent_generation.manifest import canonical_generation_manifest
 from agent_generation.result_contract import (
     ResultContractError,
-    canonical_manifest_bytes,
     validate_result_manifest,
 )
 
@@ -172,8 +172,15 @@ def _read_regular_bytes(path: Path, maximum: int) -> bytes:
         raise SampleInfrastructureError(f"cannot read bundle artifact: {path.name}") from error
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > maximum:
-            raise SampleInfrastructureError(f"bundle artifact is not bounded regular: {path.name}")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+            or metadata.st_size > maximum
+        ):
+            raise SampleInfrastructureError(
+                f"bundle artifact is not bounded owned regular: {path.name}"
+            )
         content = bytearray()
         while len(content) <= maximum:
             block = os.read(descriptor, min(65536, maximum + 1 - len(content)))
@@ -206,7 +213,7 @@ def validate_sample_bundle(
             expected_sample_id=output.stem,
             expected_run_config_sha256=expected_run_config_sha256,
         )
-        if canonical_manifest_bytes(manifest) != manifest_bytes:
+        if canonical_generation_manifest(manifest) != manifest_bytes:
             raise ResultContractError("manifest bytes are not canonical")
     except (UnicodeDecodeError, json.JSONDecodeError, ResultContractError) as error:
         raise SampleInfrastructureError(f"sample manifest is invalid: {error}") from error
@@ -232,8 +239,12 @@ def _recover_before_generation(output_path: Path, config_digest: str) -> Optiona
     except FileNotFoundError:
         candidate_metadata = None
     if candidate_metadata is not None:
-        if not stat.S_ISREG(candidate_metadata.st_mode):
-            raise SampleInfrastructureError("candidate completion marker is nonregular")
+        if (
+            not stat.S_ISREG(candidate_metadata.st_mode)
+            or candidate_metadata.st_uid != os.geteuid()
+            or candidate_metadata.st_nlink != 1
+        ):
+            raise SampleInfrastructureError("candidate completion marker is unsafe")
         return validate_sample_bundle(output, config_digest)
 
     present: list[Path] = []
@@ -242,7 +253,11 @@ def _recover_before_generation(output_path: Path, config_digest: str) -> Optiona
             metadata = path.lstat()
         except FileNotFoundError:
             continue
-        if not stat.S_ISREG(metadata.st_mode):
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_nlink != 1
+        ):
             raise SampleInfrastructureError("partial sample sidecar is suspicious")
         present.append(path)
     if present:
@@ -305,6 +320,13 @@ def commit_sample_bundle(
     if output.stem != sample_id:
         raise SampleInfrastructureError("sample ID does not match output target")
     output.parent.mkdir(parents=True, exist_ok=True)
+    parent_metadata = output.parent.lstat()
+    if (
+        not stat.S_ISDIR(parent_metadata.st_mode)
+        or stat.S_ISLNK(parent_metadata.st_mode)
+        or parent_metadata.st_uid != os.geteuid()
+    ):
+        raise SampleInfrastructureError("sample output directory is unsafe")
     lock_path = output.parent / f".{sample_id}.lock"
     lock_descriptor = os.open(
         lock_path,
@@ -312,6 +334,13 @@ def commit_sample_bundle(
         0o600,
     )
     try:
+        lock_metadata = os.fstat(lock_descriptor)
+        if (
+            not stat.S_ISREG(lock_metadata.st_mode)
+            or lock_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(lock_metadata.st_mode) != 0o600
+        ):
+            raise SampleInfrastructureError("sample lock is unsafe")
         try:
             fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
@@ -343,7 +372,7 @@ def commit_sample_bundle(
             trajectory=trajectory,
             stderr=stderr,
         )
-        manifest_bytes = canonical_manifest_bytes(manifest)
+        manifest_bytes = canonical_generation_manifest(manifest)
         paths = sample_sidecar_paths(output)
         payloads = {
             paths["trajectory"].name: trajectory,
@@ -374,12 +403,15 @@ def commit_sample_bundle(
                 )
             os.fsync(directory_descriptor)
             _fault(fault, "sidecars_synced")
-            os.replace(
-                temporaries.pop(output.name),
+            candidate_temporary = temporaries.pop(output.name)
+            os.link(
+                candidate_temporary,
                 output.name,
                 src_dir_fd=directory_descriptor,
                 dst_dir_fd=directory_descriptor,
+                follow_symlinks=False,
             )
+            os.unlink(candidate_temporary, dir_fd=directory_descriptor)
             candidate_renamed = True
             _fault(fault, "candidate_renamed")
             os.fsync(directory_descriptor)

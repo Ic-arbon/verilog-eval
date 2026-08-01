@@ -1,0 +1,32 @@
+Fixed revision: 245c19918f18abb7e6aa328282f3624afc0e2884
+
+Every fixed-revision live orchestration edge below must be absent or replaced in the atomic cutover:
+
+- configure.ac: --with-agent, --with-agent-timeout, --with-agent-max-turns,
+  --with-agent-max-tool-calls, --with-agent-max-input-tokens,
+  --with-agent-thinking, and --with-agent-tool-profile parsers.
+- Makefile.in: generator-specific GENERATE_FLAGS, Agent sidecar variables,
+  Agent report recipe, Agent pregen conditionals, and Agent clean conditionals.
+- flake.nix runAgentEvaluation: endpoint health probe, key-file/default-key
+  fallback, semantic configure argv, short config hash, direct configure/Make,
+  and environment provenance fan-out.
+- agent_generation.cli.AgentGeneratorConfig and broad sample CLI.
+- agent_generation.submission.publish_submission and its direct candidate write.
+- agent_generation.manifest.write_generation_sidecars and numbered schema field.
+- agent_generation.report numbered writer/reader contract.
+- agent_generation.report_transaction temporary unreachable implementation.
+- AgentDriver.profile_id and Pi/OpenCode numbered profile implementations.
+- Pi/OpenCode vllm-local provider labels and OpenCode sampling fields.
+- scripts/sv-agent-analyze old schema-only report call.
+- scripts/sv-agent-generate old broad CLI import behavior.
+
+Replacement evidence:
+
+- tests/test_generator_reachability.py
+- tests/test_generator_architecture.py
+- tests/test_sv_agent_generate.py
+- tests/test_agent_run.py
+- tests/test_agent_sample_result.py
+- tests/test_agent_reporting.py
+- tests/test_agent_drivers.py
+- tests/test_agent_flake.py

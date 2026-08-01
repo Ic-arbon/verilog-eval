@@ -2,76 +2,58 @@ from pathlib import Path
 import unittest
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class AgentFlakeIntegrationTests(unittest.TestCase):
-    def test_agent_app_uses_make_as_the_only_benchmark_orchestrator(self):
-        flake = (REPO_ROOT / "flake.nix").read_text()
-        agent_app = flake.split("runAgentEvaluation =", 1)[1].split(
+    def agent_app(self) -> str:
+        flake = (ROOT / "flake.nix").read_text()
+        return flake.split("runAgentEvaluation =", 1)[1].split(
             "runVllmEvaluation =", 1
         )[0]
 
-        self.assertIn("--with-generator=agent", agent_app)
-        self.assertIn("--with-model=qwen3.6-coder", agent_app)
-        self.assertIn("--with-task=spec-to-rtl", agent_app)
-        self.assertIn("--with-agent-max-input-tokens=16384", agent_app)
-        self.assertIn("--with-max-tokens=16384", agent_app)
-        self.assertIn("VERILOG_EVAL_JOBS:-4", agent_app)
-        self.assertIn('"$root/configure"', agent_app)
-        self.assertIn("exec make", agent_app)
-        self.assertNotIn("agent_eval/runner.py", agent_app)
-        self.assertNotIn("PYTHONPATH", agent_app)
-        self.assertNotIn("bubblewrap", agent_app)
+    def test_agent_app_only_binds_resources_and_execs_python_runner(self):
+        app = self.agent_app()
+        self.assertIn("scripts/run-agent-evaluation", app)
+        self.assertIn("python3 -I", app)
+        self.assertIn("os.execve(", app)
+        self.assertIn('python = "${pkgs.python311}/bin/python3"', app)
+        self.assertIn('"BASH_ENV"', app)
+        self.assertIn('"LD_PRELOAD"', app)
+        self.assertIn("AGENT_EVAL_DOCKER_IMAGE_STANDARD", app)
+        self.assertIn("AGENT_EVAL_DOCKER_ARCHIVE_STANDARD", app)
+        self.assertIn("AGENT_EVAL_DOCKER_IMAGE_RTL", app)
+        self.assertIn("AGENT_EVAL_DOCKER_ARCHIVE_RTL", app)
+        for forbidden in (
+            '"$root/configure"',
+            "exec make",
+            "curl",
+            "health",
+            "npm",
+            "verilog-agent-tools-setup",
+            "VERILOG_EVAL_VLLM_KEY_FILE",
+            "source_revision",
+            "config_key",
+            "agent-nix-eval",
+        ):
+            self.assertNotIn(forbidden, app)
 
-    def test_agent_app_loads_selected_pinned_image_and_scopes_credentials(self):
-        flake = (REPO_ROOT / "flake.nix").read_text()
-        agent_app = flake.split("runAgentEvaluation =", 1)[1].split(
-            "runVllmEvaluation =", 1
+    def test_agent_image_tags_are_semantic_and_source_is_not_build_context(self):
+        flake = (ROOT / "flake.nix").read_text()
+        self.assertIn('agentSandboxImageTag = "standard"', flake)
+        self.assertIn('minimalRtlSandboxImageTag = "rtl"', flake)
+        image_builder = flake.split("mkAgentSandboxImage =", 1)[1].split(
+            "pythonRequirements =", 1
         )[0]
+        self.assertIn("dockerTools.buildLayeredImage", image_builder)
+        self.assertNotIn("copyToRoot = ./.;", image_builder)
+        self.assertNotIn('tag = "v1"', image_builder)
 
-        self.assertIn("docker load --input", agent_app)
-        self.assertIn("docker image inspect", agent_app)
-        self.assertIn("AGENT_EVAL_DOCKER_IMAGE_BASE", agent_app)
-        self.assertIn("AGENT_EVAL_DOCKER_IMAGE_RTL", agent_app)
-        self.assertIn("AGENT_EVAL_AGENT_TOOLS", agent_app)
-        self.assertIn(
-            "AGENT_EVAL_AGENT_TOOLS must be set explicitly",
-            agent_app,
-        )
-        self.assertNotIn("verilog-agent-tools-setup", agent_app)
-        self.assertIn("agent_tools_content_sha256", agent_app)
-        self.assertIn("OPENAI_API_BASE", agent_app)
-        self.assertIn("OPENAI_API_KEY", agent_app)
-        self.assertIn("VERILOG_EVAL_SOURCE_REVISION", agent_app)
-        self.assertIn("VERILOG_EVAL_SOURCE_DIFF_SHA256", agent_app)
-        self.assertIn("AGENT_EVAL_DOCKER_IMAGE_ID", agent_app)
-        self.assertIn("AGENT_EVAL_AGENT_TOOLS_VERSIONS", agent_app)
-        self.assertNotIn(
-            'export AGENT_EVAL_AGENT_TOOLS_VERSIONS="$(',
-            agent_app,
-        )
-        self.assertNotIn(
-            'export AGENT_EVAL_AGENT_TOOLS_LOCK_SHA256="$(',
-            agent_app,
-        )
-        self.assertNotIn("AGENT_EVAL_STORE_ROOTS", agent_app)
-
-    def test_build_hashes_include_source_and_endpoint_provenance(self):
-        flake = (REPO_ROOT / "flake.nix").read_text()
-        model_app = flake.split("runEvaluation =", 1)[1].split(
-            "runAgentEvaluation =", 1
-        )[0]
-        agent_app = flake.split("runAgentEvaluation =", 1)[1].split(
-            "runVllmEvaluation =", 1
-        )[0]
-
-        for app in (model_app, agent_app):
-            with self.subTest(app=app[:40]):
-                self.assertIn("source_revision", app)
-                self.assertIn("source_diff_sha256", app)
-                self.assertIn("OPENAI_API_BASE", app)
-                self.assertIn('printf \'%s\\0\'', app)
+    def test_setup_remains_separate_from_formal_agent_app(self):
+        flake = (ROOT / "flake.nix").read_text()
+        setup = flake.split("setupAgentTools =", 1)[1].split("setupPython =", 1)[0]
+        self.assertIn("npm install", setup)
+        self.assertNotIn("npm install", self.agent_app())
 
 
 if __name__ == "__main__":

@@ -1,164 +1,123 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-root="${VERILOG_EVAL_ROOT:-}"
-if [[ -z "$root" ]]; then
-  root="$(git rev-parse --show-toplevel)"
-fi
-
+root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
 for program in docker nix python3; do
-  if ! command -v "$program" >/dev/null 2>&1; then
-    echo "missing required program: $program" >&2
-    exit 2
-  fi
+  command -v "$program" >/dev/null || { echo "missing required program: $program" >&2; exit 2; }
 done
 
 stamp="$(date -u '+%Y%m%dT%H%M%SZ')-$$"
-run_root="${AGENT_EVAL_ISOLATION_RUN_ROOT:-$root/build/agent-isolation-$stamp}"
+build_root="${AGENT_EVAL_ISOLATION_RUN_ROOT:-$root/build/agent-isolation-$stamp}"
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-isolation.XXXXXX")"
 sentinel="$root/dataset_spec-to-rtl/.agent-hidden-sentinel-$stamp"
 tools="$scratch/agent-tools"
+package="$tools/node_modules/opencode-ai"
 problem_file="$scratch/problems.txt"
+base_file="$scratch/base-url"
+path_file="$scratch/run-path"
 before_containers="$scratch/containers-before.txt"
 after_containers="$scratch/containers-after.txt"
+server_pid=""
 
 cleanup() {
+  [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true
   rm -f "$sentinel" || true
   chmod -R u+w "$scratch" 2>/dev/null || true
   rm -rf "$scratch" || true
 }
 trap cleanup EXIT INT TERM
 
-if [[ -e "$sentinel" ]]; then
-  echo "refusing to overwrite existing sentinel: $sentinel" >&2
-  exit 2
-fi
 printf 'must-not-enter-agent-container\n' >"$sentinel"
 printf 'Prob001_zero\n' >"$problem_file"
-mkdir -p "$tools/node_modules/.bin" "$run_root"
-
-cat >"$tools/node_modules/.bin/opencode" <<'FAKE_AGENT'
+mkdir -p "$package" "$build_root"
+cat >"$package/opencode" <<'FAKE_AGENT'
 #!/usr/bin/env bash
 set -euo pipefail
-
 violations=()
 mapfile -t hidden_paths < <(
-  find / \
-    \( -name 'Prob001_zero_ref.sv' \
-       -o -name 'Prob001_zero_test.sv' \
-       -o -name '.agent-hidden-sentinel-*' \) \
-    -print 2>/dev/null || true
+  find / \( -name 'Prob001_zero_ref.sv' -o -name 'Prob001_zero_test.sv' -o -name '.agent-hidden-sentinel-*' \) -print 2>/dev/null || true
 )
-if (( ${#hidden_paths[@]} > 0 )); then
-  violations+=("hidden grader files are visible: ${hidden_paths[*]}")
-fi
-if [[ -e /var/run/docker.sock ]]; then
-  violations+=("Docker socket is visible")
-fi
-if [[ -e /opt/agent/verilog-eval ]]; then
-  violations+=("host repository path is visible")
-fi
-if [[ -n "${AGENT_EVAL_SENTINEL_SECRET:-}" ]]; then
-  violations+=("unapproved host environment reached the Agent")
-fi
-
+(( ${#hidden_paths[@]} == 0 )) || violations+=("hidden grader files are visible: ${hidden_paths[*]}")
+[[ ! -e /var/run/docker.sock ]] || violations+=("Docker socket is visible")
+[[ ! -e /opt/agent/verilog-eval ]] || violations+=("host repository path is visible")
+[[ -z "${AGENT_EVAL_SENTINEL_SECRET:-}" ]] || violations+=("unapproved host environment reached the Agent")
 if (( ${#violations[@]} > 0 )); then
   printf '%s\n' "${violations[@]}" >&2
-  printf '{"type":"error","error":"isolation violation"}\n'
   exit 86
 fi
-
 cat >TopModule.sv <<'VERILOG'
 module TopModule(output zero);
   assign zero = 1'b0;
 endmodule
 VERILOG
-printf '{"type":"tool_use","part":{"type":"tool","state":{"status":"completed"}}}\n'
-printf '{"type":"text","part":{"type":"text","text":"isolation-sentinel-clear"}}\n'
-printf '{"type":"step_finish","part":{"type":"step-finish","tokens":{"input":0,"output":0,"reasoning":0}}}\n'
+printf '{"type":"tool_use","part":{"state":{"status":"completed"}}}\n'
+printf '{"type":"text","part":{"text":"isolation-sentinel-clear"}}\n'
+printf '{"type":"step_finish","part":{"tokens":{"input":1,"output":1,"reasoning":0}}}\n'
 FAKE_AGENT
-chmod 0555 "$tools/node_modules/.bin/opencode"
-chmod 0555 "$tools" "$tools/node_modules" "$tools/node_modules/.bin"
+chmod 0555 "$package/opencode"
+cat >"$tools/package-lock.json" <<'JSON'
+{"name":"agent-tools","lockfileVersion":3,"packages":{"":{"dependencies":{"opencode-ai":"1.18.7"}},"node_modules/opencode-ai":{"version":"1.18.7","bin":{"opencode":"opencode"}}}}
+JSON
 
+"$root/tests/integration/openai-model-list-server" --write-base-url "$base_file" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$base_file" ]] && break; sleep 0.05; done
+base_url="$(cat "$base_file")"
+: >"$path_file"
+chmod 0600 "$path_file"
 docker ps -a --format '{{.Names}}' | sort >"$before_containers"
 
 export VERILOG_EVAL_ROOT="$root"
-export VERILOG_EVAL_BUILD_ROOT="$run_root"
+export VERILOG_EVAL_BUILD_ROOT="$build_root"
 export VERILOG_EVAL_JOBS=1
 export AGENT_EVAL_AGENT_TOOLS="$tools"
 export AGENT_EVAL_SENTINEL_SECRET="must-not-enter-agent-container"
+export OPENAI_API_KEY="smoke-key"
 
 set +e
 nix run "path:$root#agent-eval" -- \
-  --with-generator=agent \
   --with-agent=opencode \
+  --with-openai-api-base="$base_url" \
   --with-problems="$problem_file" \
   --with-agent-timeout=60 \
   --with-agent-max-turns=2 \
   --with-agent-thinking=off \
-  --with-agent-tool-profile=base \
-  2>&1 | tee "$run_root/console.log"
-evaluation_status=${PIPESTATUS[0]}
+  --with-agent-toolset=standard \
+  --run-path-file="$path_file" \
+  2>&1 | tee "$build_root/console.log"
+status=${PIPESTATUS[0]}
 set -e
-if (( evaluation_status != 0 )); then
-  echo "isolation smoke failed; artifacts preserved at $run_root" >&2
-  exit "$evaluation_status"
-fi
+(( status == 0 )) || { echo "isolation smoke failed at $build_root" >&2; exit "$status"; }
+run_dir="$(cat "$path_file")"
 
 docker ps -a --format '{{.Names}}' | sort >"$after_containers"
 leftovers="$(comm -13 "$before_containers" "$after_containers" | grep '^verilog-eval-' || true)"
-if [[ -n "$leftovers" ]]; then
-  echo "new Agent containers were not removed:" >&2
-  echo "$leftovers" >&2
-  exit 1
-fi
+[[ -z "$leftovers" ]] || { echo "new Agent containers remain: $leftovers" >&2; exit 1; }
 
-python3 - "$run_root" <<'PY'
-import hashlib
-import json
-import sys
+python3 - "$run_dir" <<'PY'
+import hashlib, json, sys
 from pathlib import Path
-
-run_root = Path(sys.argv[1])
-manifests = list(run_root.glob("agent-nix-eval-*/*/*-generation.json"))
+run = Path(sys.argv[1])
+manifests = list(run.glob("*/*-generation.json"))
 assert len(manifests) == 1, manifests
 manifest_path = manifests[0]
 manifest = json.loads(manifest_path.read_text())
-runtime = manifest["runtime"]
-assert len(runtime["source_revision"]) == 40, runtime
-assert len(runtime["source_diff_sha256"]) == 64, runtime
-assert runtime["docker_image"] == "verilog-eval-agent-sandbox:v1", runtime
-assert runtime["docker_image_id"].startswith("sha256:"), runtime
-assert runtime["api_base_url"] == "http://127.0.0.1:58000/v1", runtime
-execution_status = manifest["execution"].get("status")
-submission_status = manifest["submission"].get("status")
-assert execution_status == "completed", manifest
-assert submission_status == "published", manifest
-
-sample_path = manifest_path.with_name(
-    manifest_path.name.removesuffix("-generation.json") + ".sv"
-)
-assert sample_path.is_file(), sample_path
-actual_digest = hashlib.sha256(sample_path.read_bytes()).hexdigest()
-assert actual_digest == manifest["submission"]["sha256"]
-
-trajectory_path = manifest_path.with_name(
-    manifest_path.name.removesuffix("-generation.json") + "-trajectory.jsonl"
-)
-assert "isolation-sentinel-clear" in trajectory_path.read_text()
-summary_path = manifest_path.parents[1] / "summary.txt"
-assert "pass_rate             =     100.00" in summary_path.read_text()
-report_path = manifest_path.parents[1] / "agent-summary.json"
-report = json.loads(report_path.read_text())
+assert "schema_version" not in manifest
+assert manifest["producer"]["run_config_sha256"] == run.name
+assert manifest["execution"]["status"] == "completed", manifest
+assert manifest["submission"]["status"] == "published", manifest
+sample = manifest_path.with_name(manifest_path.name.removesuffix("-generation.json") + ".sv")
+assert hashlib.sha256(sample.read_bytes()).hexdigest() == manifest["artifacts"]["candidate"]["sha256"]
+trajectory = manifest_path.with_name(manifest_path.name.removesuffix("-generation.json") + "-trajectory.jsonl")
+assert "isolation-sentinel-clear" in trajectory.read_text()
+report = json.loads((run / "agent-summary.json").read_text())
 assert report["correctness"]["passed"] == 1, report
 assert report["execution"]["status_counts"] == {"completed": 1}, report
 assert report["submission"]["status_counts"] == {"published": 1}, report
-assert report["samples"][0]["runtime"] == runtime, report
-
-print("isolation_status=passed")
+assert not (run / "runtime-bindings.json").exists()
+assert not (run / ".credential.sock").exists()
 print(f"manifest={manifest_path}")
-print(f"sample_sha256={actual_digest}")
 PY
-
+"$root/scripts/validate-agent-run" --expected-samples=1 "$run_dir"
 echo "no new Agent containers remain"
-echo "isolation artifacts preserved at $run_root"
+echo "isolation artifacts preserved at $run_dir"

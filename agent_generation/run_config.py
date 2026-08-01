@@ -17,6 +17,9 @@ _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 _ENVIRONMENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SAFE_LOGICAL_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@+:-]{0,255}")
+_PACKAGE_NAME = re.compile(
+    r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9][A-Za-z0-9_.-]{0,214}"
+)
 _NONCE = re.compile(r"[0-9a-f]{32}")
 _ALLOWED_AGENTS = frozenset({"pi", "opencode"})
 _ALLOWED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
@@ -205,7 +208,8 @@ def _validate_runtime(value: Any) -> None:
     if not isinstance(versions, dict) or not versions:
         raise RunConfigError("runtime.agent_tools.versions must be a non-empty object")
     for name, version in versions.items():
-        _logical_name(name, "runtime.agent_tools.versions key")
+        if not isinstance(name, str) or _PACKAGE_NAME.fullmatch(name) is None:
+            raise RunConfigError("runtime.agent_tools.versions key is invalid")
         _string(version, f"runtime.agent_tools.versions.{name}")
 
     toolchain = runtime["toolchain"]
@@ -275,7 +279,9 @@ def validate_run_config(
     )
     if agent["name"] not in _ALLOWED_AGENTS:
         raise RunConfigError("agent.name is unsupported")
-    _string(agent["model"], "agent.model")
+    model = _string(agent["model"], "agent.model")
+    if model.startswith(("/", "file://")) or "../" in model:
+        raise RunConfigError("agent.model must be a locator-free model ID")
     if not isinstance(agent["thinking"], bool):
         raise RunConfigError("agent.thinking must be boolean")
     if agent["toolset"] not in {"standard", "rtl"}:
@@ -344,7 +350,7 @@ def _load_json_bytes(raw: bytes) -> dict[str, Any]:
     try:
         text = raw.decode("utf-8")
         value = json.loads(text, object_pairs_hook=_object_without_duplicates)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except (UnicodeDecodeError, ValueError) as error:
         raise RunConfigError(f"invalid run configuration JSON: {error}") from error
     return validate_run_config(value)
 
@@ -366,8 +372,16 @@ def load_run_config(
         raise RunConfigError(f"cannot open run configuration: {error}") from error
     try:
         metadata = os.fstat(descriptor)
-        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 16 * 1024 * 1024:
-            raise RunConfigError("run configuration must be a bounded regular file")
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_nlink != 1
+            or metadata.st_size > 16 * 1024 * 1024
+        ):
+            raise RunConfigError(
+                "run configuration must be a bounded owned mode-0600 regular file"
+            )
         raw = b""
         while len(raw) <= 16 * 1024 * 1024:
             block = os.read(descriptor, min(1024 * 1024, 16 * 1024 * 1024 + 1 - len(raw)))
@@ -399,7 +413,12 @@ def publish_run_config(build_root: Path, value: Mapping[str, Any]) -> Path:
     if build_root.is_symlink() or not build_root.is_dir():
         raise RunConfigError("build root must be a real directory")
 
-    root_descriptor = os.open(build_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    root_descriptor = os.open(
+        build_root,
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0),
+    )
     run_descriptor = -1
     temporary_name = f".run-config.{os.getpid()}.{os.urandom(8).hex()}.tmp"
     try:
@@ -413,6 +432,12 @@ def publish_run_config(build_root: Path, value: Mapping[str, Any]) -> Path:
             os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
             dir_fd=root_descriptor,
         )
+        run_metadata = os.fstat(run_descriptor)
+        if (
+            run_metadata.st_uid != os.geteuid()
+            or stat.S_IMODE(run_metadata.st_mode) != 0o700
+        ):
+            raise RunConfigError("run directory must be owned mode 0700")
         try:
             descriptor = os.open(
                 temporary_name,

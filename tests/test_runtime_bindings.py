@@ -23,6 +23,7 @@ def bindings(root: Path) -> dict:
         "run_config_sha256": CONFIG_DIGEST,
         "source_root": str(root / "source"),
         "dataset_dir": str(root / "source" / "dataset_spec-to-rtl"),
+        "problems_file": str(root / "source" / "dataset_spec-to-rtl/problems.txt"),
         "build_dir": str(root / "build"),
         "docker": {
             "client": str(root / "bin" / "docker"),

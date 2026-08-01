@@ -31,10 +31,6 @@ Public task specification:
 class AgentDriver(Protocol):
     """Translate one Agent CLI without owning lifecycle or grading."""
 
-    @property
-    def profile_id(self) -> str:
-        ...
-
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         ...
 

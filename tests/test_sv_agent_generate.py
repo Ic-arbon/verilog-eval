@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import os
@@ -8,330 +9,233 @@ import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from agent_generation.cli import (
-    AgentGeneratorConfig,
-    _argument_parser,
-    main,
-    run_agent_generation,
-)
-from agent_generation.contracts import (
-    AgentEnvironment,
-    AgentUsage,
-    ProcessResult,
-    RuntimeProvenance,
-)
+from agent_generation.cli import _argument_parser, main
+from agent_generation.contracts import AgentEnvironment, AgentUsage, ProcessResult
+from agent_generation.run_config import publish_run_config
+from agent_generation.runtime_bindings import publish_runtime_bindings
+from agent_generation.tools import project_agent_tools
+from tests.test_agent_run_config import valid_config
+from tests.test_agent_tools_projection import make_tools
 
 
 class FakeDriver:
-    profile_id = "fake-artifact-v1"
-
     def __init__(self):
         self.requests = []
 
     def write_config(self, request):
         self.requests.append(request)
-        config_dir = request.workspace / ".agent-config"
-        config_dir.mkdir()
-        config_path = config_dir / "fake.json"
-        config_path.write_text('{"fake": true}\n')
-        return (config_path,)
+        path = request.workspace / ".agent-config/fake.json"
+        path.parent.mkdir()
+        path.write_text('{"fake":true}\n')
+        return (path,)
 
     def build_command(self, request):
-        return ("fake-agent", "--workspace", "/workspace")
+        return ("fake-agent", request.sample_id)
 
     def environment(self, request):
         return AgentEnvironment(
             variables=(("HOME", "/workspace/.home"),),
-            inherit=("VLLM_API_KEY",),
+            inherit=("OPENAI_API_KEY",),
         )
 
-    def parse_event(self, line):
-        return None
-
     def classify_budget_event(self, line):
-        return "turn" if line == "turn" else None
+        return None
 
     def normalize_trajectory_line(self, line):
         return line
 
+    def parse_event(self, line):
+        try:
+            return json.loads(line)
+        except json.JSONDecodeError:
+            return None
+
 
 class FakeExecutor:
-    def __init__(self, result, candidate=None):
-        self.result = result
+    def __init__(self, candidate=None):
         self.candidate = candidate
         self.specs = []
-        self.workspace_paths = []
-        self.workspace_snapshots = []
+        self.snapshots = []
 
     def run(self, spec):
         self.specs.append(spec)
-        self.workspace_paths.append(spec.workspace)
-        self.workspace_snapshots.append(
-            {
-                path.name: path.read_text()
-                for path in spec.workspace.iterdir()
-                if path.is_file()
-            }
-        )
+        self.snapshots.append(sorted(path.name for path in spec.workspace.iterdir()))
         if self.candidate is not None:
             (spec.workspace / "TopModule.sv").write_text(self.candidate)
-        return self.result
+        return ProcessResult(
+            status="completed",
+            exit_code=0,
+            duration_seconds=1.25,
+            stdout='{"type":"turn_end","message":{"usage":{"input":10,"output":20}}}\n',
+            stderr="diagnostic\n",
+            usage=AgentUsage.unavailable(),
+        )
 
 
-def completed_result(stdout="trajectory\n", stderr=""):
-    return ProcessResult(
-        status="completed",
-        exit_code=0,
-        duration_seconds=1.25,
-        stdout=stdout,
-        stderr=stderr,
-        usage=AgentUsage(
-            input_tokens=120,
-            output_tokens=30,
-            turns=2,
-            tool_calls=3,
-            usage_source="fake_events",
-        ),
-    )
+class AgentSampleFixture:
+    def __init__(self, root: Path):
+        self.root = root
+        self.dataset = root / "dataset_spec-to-rtl"
+        self.dataset.mkdir()
+        self.prompt = self.dataset / "Prob001_zero_prompt.txt"
+        self.prompt.write_text("Produce a constant-zero TopModule.\n")
+        (self.dataset / "Prob001_zero_test.sv").write_text("test\n")
+        (self.dataset / "Prob001_zero_ref.sv").write_text("ref\n")
+        tools = make_tools(root)
+        projection = project_agent_tools(tools, root / "projections", "opencode")
+
+        config = valid_config()
+        config["agent"].update(name="opencode", toolset="standard")
+        config["benchmark"]["inputs"] = [
+            {
+                "kind": "problem_list",
+                "name": "problems.txt",
+                "sha256": "a" * 64,
+                "size_bytes": 13,
+            },
+            {
+                "kind": "prompt",
+                "name": self.prompt.name,
+                "sha256": hashlib.sha256(self.prompt.read_bytes()).hexdigest(),
+                "size_bytes": self.prompt.stat().st_size,
+            },
+            {
+                "kind": "hidden_test",
+                "name": "Prob001_zero_test.sv",
+                "sha256": hashlib.sha256((self.dataset / "Prob001_zero_test.sv").read_bytes()).hexdigest(),
+                "size_bytes": 5,
+            },
+            {
+                "kind": "hidden_reference",
+                "name": "Prob001_zero_ref.sv",
+                "sha256": hashlib.sha256((self.dataset / "Prob001_zero_ref.sv").read_bytes()).hexdigest(),
+                "size_bytes": 4,
+            },
+        ]
+        config["runtime"]["agent_tools"] = {
+            "content_sha256": projection.content_sha256,
+            "source_content_sha256": projection.source_content_sha256,
+            "lock_sha256": projection.lock_sha256,
+            "versions": projection.versions,
+        }
+        self.config_path = publish_run_config(root / "runs", config)
+        self.run = self.config_path.parent
+        evidence = {
+            "base_url": config["endpoint"]["base_url"],
+            "model": config["agent"]["model"],
+            "model_count": 1,
+            "models_url": config["endpoint"]["base_url"] + "/models",
+            "response_sha256": "5" * 64,
+        }
+        (self.run / "endpoint-evidence.json").write_text(
+            json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+        bindings = {
+            "run_config_sha256": self.run.name,
+            "source_root": str(root / "source"),
+            "dataset_dir": str(self.dataset),
+            "problems_file": str(self.dataset / "problems.txt"),
+            "build_dir": str(self.run),
+            "docker": {
+                "client": str(root / "bin/docker"),
+                "daemon": "unix:///var/run/docker.sock",
+                "image": "verilog-eval-agent-sandbox:standard",
+                "archive": str(root / "image.tar"),
+            },
+            "tools_projection": str(projection.path),
+            "toolchain": {
+                "bash": str(root / "bin/bash"),
+                "make": str(root / "bin/make"),
+                "iverilog": str(root / "bin/iverilog"),
+                "timeout": str(root / "bin/timeout"),
+            },
+            "support_files": {},
+            "credential_broker": ".credential.sock",
+        }
+        publish_runtime_bindings(self.config_path, bindings)
+        self.output = self.run / "Prob001_zero/Prob001_zero_sample01.sv"
 
 
 class AgentGeneratorCliTests(unittest.TestCase):
-    def test_thinking_agent_defaults_to_16k_output_budget(self):
-        parser = _argument_parser()
-        args = parser.parse_args(
-            [
-                "--agent=pi",
-                "--model=qwen3.6-coder",
-                "--task=spec-to-rtl",
-                "--output=TopModule.sv",
-                "prompt.txt",
-            ]
-        )
-
-        self.assertEqual(args.max_tokens, 16384)
-
-    def test_script_is_executable_generator_program(self):
-        script = Path(__file__).resolve().parents[1] / "scripts" / "sv-agent-generate"
-
+    def test_script_is_executable_narrow_generator_program(self):
+        script = Path(__file__).resolve().parents[1] / "scripts/sv-agent-generate"
         self.assertTrue(script.is_file())
         self.assertTrue(os.access(script, os.X_OK))
+        source = script.read_text()
+        self.assertNotIn("temperature", source)
+        self.assertNotIn("top_p", source)
 
-    def test_cli_runs_one_sample_with_injected_runtime_and_public_rules(self):
-        candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            prompt = root / "Prob001_zero_prompt.txt"
-            output = root / "build" / "Prob001_zero_sample01.sv"
-            prompt.write_text("Produce a constant-zero TopModule.\n")
-            driver = FakeDriver()
-            executor = FakeExecutor(completed_result(), candidate=candidate)
-            argv = [
-                "--agent=pi",
-                "--model=qwen3.6-coder",
-                "--task=spec-to-rtl",
-                "--examples=0",
-                "--rules",
-                "--max-tokens=8192",
-                "--temperature=0.6",
-                "--top-p=0.95",
-                "--agent-thinking=off",
-                "--agent-timeout=30",
-                "--agent-max-turns=10",
-                "--agent-max-tool-calls=20",
-                "--agent-max-input-tokens=16384",
-                f"--work-root={root / 'runtime'}",
-                f"--output={output}",
-                str(prompt),
-            ]
-
-            with redirect_stdout(io.StringIO()):
-                exit_code = main(argv, driver=driver, executor=executor)
-
-            self.assertEqual(exit_code, 0)
-            self.assertEqual(output.read_text(), candidate)
-            self.assertIn("TASK.md", executor.workspace_snapshots[0])
-            self.assertIn("RULES.md", executor.workspace_snapshots[0])
-            self.assertIn(
-                "synchronous reset",
-                executor.workspace_snapshots[0]["RULES.md"],
-            )
-            self.assertNotIn("TopModule.sv", executor.workspace_snapshots[0])
-            self.assertEqual(driver.requests[0].max_input_tokens, 16384)
-
-
-class AgentGeneratorVerticalSliceTests(unittest.TestCase):
-    def make_config(self, root):
-        prompt = root / "Prob001_zero_prompt.txt"
-        prompt.write_text("Produce a constant-zero TopModule.\n")
-        return AgentGeneratorConfig(
-            sample_id="Prob001_zero_sample01",
-            agent_name="fake",
-            model="qwen3.6-coder",
-            task="spec-to-rtl",
-            prompt_path=prompt,
-            output_path=root / "build" / "Prob001_zero_sample01.sv",
-            work_root=root / "runtime",
-            timeout_seconds=30,
-            max_turns=10,
-            max_tool_calls=20,
-            max_input_tokens=16384,
-            per_call_max_tokens=8192,
-            rules_text=None,
+    def test_parser_exposes_only_run_config_output_verbose_and_prompt(self):
+        parser = _argument_parser()
+        args = parser.parse_args(
+            ["--run-config=/run/config", "--output=out.sv", "--verbose", "prompt.txt"]
         )
-
-    def test_file_submission_is_published_with_manifest_and_sidecars(self):
-        candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            base_config = self.make_config(root)
-            config = AgentGeneratorConfig(
-                **{
-                    **base_config.__dict__,
-                    "runtime_provenance": RuntimeProvenance(
-                        source_revision="1" * 40,
-                        source_diff_sha256="2" * 64,
-                        docker_image="verilog-eval-agent-sandbox:v1",
-                        docker_image_id="sha256:" + "3" * 64,
-                        agent_tools_versions="pi=0.82.1 opencode=1.18.7",
-                        agent_tools_content_sha256="5" * 64,
-                    ),
-                }
-            )
-            driver = FakeDriver()
-            executor = FakeExecutor(
-                completed_result(stderr="diagnostic\n"),
-                candidate=candidate,
-            )
-            stdout = io.StringIO()
-
-            with redirect_stdout(stdout):
-                result = run_agent_generation(config, driver, executor)
-
-            self.assertEqual(result.process.status, "completed")
-            self.assertEqual(result.submission.status, "published")
-            self.assertEqual(config.output_path.read_text(), candidate)
-            self.assertEqual(len(driver.requests), 1)
-            self.assertEqual(executor.specs[0].command[0], "fake-agent")
-            self.assertEqual(executor.specs[0].timeout_seconds, 30)
-            self.assertEqual(executor.specs[0].max_turns, 10)
-            self.assertEqual(executor.specs[0].max_tool_calls, 20)
-            self.assertEqual(executor.specs[0].event_classifier("turn"), "turn")
-            self.assertEqual(
-                executor.specs[0].trajectory_normalizer("trajectory\n"),
-                "trajectory\n",
-            )
-            self.assertEqual(
-                executor.specs[0].environment.variables,
-                (("HOME", "/workspace/.home"),),
-            )
-            self.assertEqual(
-                executor.specs[0].environment.inherit,
-                ("VLLM_API_KEY",),
-            )
-            self.assertFalse(executor.workspace_paths[0].exists())
-
-            manifest_path = config.output_path.with_name(
-                "Prob001_zero_sample01-generation.json"
-            )
-            manifest = json.loads(manifest_path.read_text())
-            self.assertEqual(manifest["schema_version"], "agent-generation/v1")
-            self.assertEqual(manifest["producer"]["kind"], "agent")
-            self.assertEqual(manifest["producer"]["profile"], "fake-artifact-v1")
-            self.assertEqual(manifest["execution"]["status"], "completed")
-            self.assertIsNone(manifest["execution"]["termination_reason"])
-            self.assertEqual(manifest["submission"]["status"], "published")
-            self.assertEqual(
-                manifest["limits"],
-                {
-                    "timeout_seconds": 30,
-                    "max_turns": 10,
-                    "max_tool_calls": 20,
-                    "max_input_tokens": 16384,
-                    "per_call_max_tokens": 8192,
-                },
-            )
-            self.assertEqual(manifest["usage"]["input_tokens"], 120)
-            self.assertEqual(manifest["runtime"]["source_revision"], "1" * 40)
-            self.assertEqual(
-                manifest["runtime"]["docker_image_id"], "sha256:" + "3" * 64
-            )
-            self.assertEqual(
-                manifest["runtime"]["agent_tools_versions"],
-                "pi=0.82.1 opencode=1.18.7",
-            )
-            self.assertEqual(
-                manifest["runtime"]["agent_tools_content_sha256"], "5" * 64
-            )
-            self.assertNotIn("workspace", json.dumps(manifest))
-
-            trajectory = config.output_path.with_name(
-                "Prob001_zero_sample01-trajectory.jsonl"
-            )
-            stderr = config.output_path.with_name(
-                "Prob001_zero_sample01-stderr.log"
-            )
-            self.assertEqual(trajectory.read_text(), "trajectory\n")
-            self.assertEqual(stderr.read_text(), "diagnostic\n")
-            self.assertIn("agent_status = completed", stdout.getvalue())
-            self.assertIn("submission_status = published", stdout.getvalue())
-            self.assertIn("prompt_tokens = 120", stdout.getvalue())
-            self.assertIn("resp_tokens   = 30", stdout.getvalue())
-
-    def test_chat_code_without_workspace_artifact_is_not_extracted(self):
-        chat_code = "[BEGIN]\nmodule TopModule; endmodule\n[DONE]\n"
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config = self.make_config(root)
-            executor = FakeExecutor(completed_result(stdout=chat_code))
-
-            with redirect_stdout(io.StringIO()):
-                result = run_agent_generation(config, FakeDriver(), executor)
-
-            self.assertEqual(result.process.status, "completed")
-            self.assertEqual(result.submission.status, "missing")
-            output = config.output_path.read_text()
-            self.assertIn("missing_submission", output)
-            self.assertNotIn("module TopModule", output)
-            trajectory = config.output_path.with_name(
-                "Prob001_zero_sample01-trajectory.jsonl"
-            )
-            self.assertEqual(trajectory.read_text(), chat_code)
-
-    def test_timeout_status_is_preserved_when_candidate_exists(self):
-        candidate = "module TopModule; endmodule\n"
-        timeout = ProcessResult(
-            status="timeout",
-            exit_code=124,
-            duration_seconds=30.0,
-            stdout="partial\n",
-            stderr="deadline exceeded\n",
-            usage=AgentUsage.unavailable(),
-        )
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            config = self.make_config(root)
-
-            stdout = io.StringIO()
-            with redirect_stdout(stdout):
-                result = run_agent_generation(
-                    config,
-                    FakeDriver(),
-                    FakeExecutor(timeout, candidate=candidate),
+        self.assertEqual(args.run_config, Path("/run/config"))
+        for forbidden in ("--temperature=0.6", "--top-p=0.95", "--agent=pi"):
+            with self.subTest(forbidden=forbidden), self.assertRaises(SystemExit):
+                parser.parse_args(
+                    ["--run-config=/run/config", "--output=out.sv", forbidden, "prompt.txt"]
                 )
 
-            self.assertEqual(result.process.status, "timeout")
-            self.assertEqual(result.submission.status, "published")
-            self.assertEqual(config.output_path.read_text(), candidate)
+    def test_narrow_cli_commits_candidate_and_unnumbered_sidecars(self):
+        candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = AgentSampleFixture(Path(tmp))
+            driver = FakeDriver()
+            executor = FakeExecutor(candidate)
+            credential_calls = []
+
+            def credential_client(**request):
+                credential_calls.append(request)
+                return "secret-canary"
+
+            stdout = io.StringIO()
+            with redirect_stdout(stdout):
+                status = main(
+                    [
+                        f"--run-config={fixture.config_path}",
+                        f"--output={fixture.output}",
+                        "--verbose",
+                        str(fixture.prompt),
+                    ],
+                    driver=driver,
+                    executor=executor,
+                    credential_client=credential_client,
+                )
+
+            self.assertEqual(status, 0)
+            self.assertEqual(fixture.output.read_text(), candidate)
             manifest = json.loads(
-                config.output_path.with_name(
-                    "Prob001_zero_sample01-generation.json"
-                ).read_text()
+                fixture.output.with_name("Prob001_zero_sample01-generation.json").read_text()
             )
-            self.assertEqual(manifest["execution"]["status"], "timeout")
+            self.assertNotIn("schema_version", manifest)
+            self.assertNotIn("profile", json.dumps(manifest))
+            self.assertEqual(manifest["producer"]["run_config_sha256"], fixture.run.name)
             self.assertEqual(manifest["submission"]["status"], "published")
-            self.assertIsNone(manifest["usage"]["input_tokens"])
-            self.assertIn("prompt_tokens = unavailable", stdout.getvalue())
-            self.assertIn("resp_tokens   = unavailable", stdout.getvalue())
+            self.assertEqual(manifest["usage"]["usage_source"], "trajectory")
+            self.assertEqual(credential_calls[0]["sample_id"], "Prob001_zero_sample01")
+            self.assertEqual(executor.snapshots[0], [".agent-config", "TASK.md"])
+            self.assertEqual(list((fixture.run / ".agent-work").glob("sample-*")), [])
+            self.assertIn("agent_status = completed", stdout.getvalue())
+
+    def test_prompt_identity_mismatch_fails_before_agent_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture = AgentSampleFixture(Path(tmp))
+            fixture.prompt.write_text("tampered\n")
+            executor = FakeExecutor("module TopModule; endmodule\n")
+            status = main(
+                [
+                    f"--run-config={fixture.config_path}",
+                    f"--output={fixture.output}",
+                    str(fixture.prompt),
+                ],
+                driver=FakeDriver(),
+                executor=executor,
+                credential_client=lambda **_request: "secret",
+            )
+            self.assertEqual(status, 2)
+            self.assertEqual(executor.specs, [])
+            self.assertFalse(fixture.output.exists())
 
 
 if __name__ == "__main__":
