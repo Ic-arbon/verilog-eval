@@ -306,7 +306,7 @@
             exit 1
           fi
 
-          jobs="''${VERILOG_EVAL_JOBS:-$(nproc)}"
+          jobs="''${VERILOG_EVAL_JOBS:-4}"
           if [[ ! "$jobs" =~ ^[1-9][0-9]*$ ]]; then
             echo "VERILOG_EVAL_JOBS must be a positive integer" >&2
             exit 2
