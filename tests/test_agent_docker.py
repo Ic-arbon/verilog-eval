@@ -234,6 +234,46 @@ class DockerExecutorTests(unittest.TestCase):
             self.assertEqual(result.termination_reason, "max_turns")
             self.assertEqual(result.stdout, '{"type":"compact"}\n' * 2)
 
+    def test_invalid_budget_classifier_result_is_infrastructure_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            tools = root / "tools"
+            workspace.mkdir()
+            tools.mkdir()
+            fake_docker = root / "docker"
+            fake_docker.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = rm ]; then exit 0; fi\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                "  if [ \"$previous\" = --cidfile ]; then printf 'abcdef1234567890\\n' >\"$argument\"; fi\n"
+                "  previous=\"$argument\"\n"
+                "done\n"
+                "printf '{\"type\":\"unexpected\"}\\n'\n"
+                "sleep 30\n"
+            )
+            fake_docker.chmod(0o755)
+            executor = DockerExecutor(
+                docker_path=str(fake_docker),
+                image="image:tag",
+                agent_tools=tools,
+                uid=1000,
+                gid=1000,
+                host_environment={},
+            )
+            spec = AgentProcessSpec(
+                command=("fake-agent",),
+                workspace=workspace,
+                timeout_seconds=20,
+                max_turns=2,
+                max_tool_calls=2,
+                event_classifier=lambda _line: "invalid-kind",
+            )
+
+            with self.assertRaises(DockerInfrastructureError):
+                executor.run(spec)
+
     def test_docker_control_plane_exit_is_infrastructure_not_sample_error(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = RecordingRunner(returncode=125, stderr="daemon failure")

@@ -2,10 +2,24 @@
 set -euo pipefail
 root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
 tools="${EXTERNAL_AGENT_TOOLS:-${AGENT_EVAL_AGENT_TOOLS:-}}"
+agent_filter=all
+scenario_filter=all
+while (( $# )); do
+  case "$1" in
+    --agent=pi|--agent=opencode|--agent=all) agent_filter="${1#*=}" ;;
+    --scenario=success|--scenario=retry|--scenario=recover|--scenario=all) scenario_filter="${1#*=}" ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+  shift
+done
 [[ -n "$tools" && -x "$tools/node_modules/.bin/pi" && -x "$tools/node_modules/.bin/opencode" ]] || {
   echo "set EXTERNAL_AGENT_TOOLS to the pinned Pi/OpenCode prefix" >&2; exit 2;
 }
 for program in nix python3; do command -v "$program" >/dev/null || exit 2; done
+if git -C "$root" ls-files | grep -E '(^|/)(http-capture|raw-http|real-request-capture)(/|\.)'; then
+  echo "tracked raw Agent HTTP capture is forbidden" >&2
+  exit 1
+fi
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-request-smoke.XXXXXX")"
 server_pid=""
 cleanup(){ [[ -z "$server_pid" ]] || kill "$server_pid" 2>/dev/null || true; rm -rf "$scratch"; }
@@ -17,11 +31,18 @@ export VERILOG_EVAL_ROOT="$root"
 export VERILOG_EVAL_JOBS=1
 
 run_case(){
-  agent="$1"; failures="$2"; label="$agent-retry$failures"
+  agent="$1"; scenario="$2"; label="$agent-$scenario"
+  failures=0; expected_requests=2; server_options=()
+  case "$scenario" in
+    success) ;;
+    retry) failures=1; expected_requests=3; server_options+=(--fail-first=1) ;;
+    recover) expected_requests=3; server_options+=(--tool-error-first) ;;
+    *) return 2 ;;
+  esac
   base="$scratch/$label.base"; log="$scratch/$label.jsonl"; path="$scratch/$label.path"
   : >"$path"; chmod 0600 "$path"
   "$root/tests/integration/openai-agent-server" \
-    --log "$log" --write-base-url "$base" --fail-first "$failures" &
+    --log "$log" --write-base-url "$base" "${server_options[@]}" &
   server_pid=$!
   for _ in {1..100}; do [[ -s "$base" ]] && break; sleep 0.05; done
   [[ -s "$base" ]] || { echo "request server failed to start" >&2; return 1; }
@@ -38,12 +59,12 @@ run_case(){
   kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; server_pid=""
   run="$(cat "$path")"
   "$root/scripts/validate-agent-run" --expected-samples=1 "$run"
-  python3 - "$log" "$failures" "$run" <<'PY'
+  python3 - "$log" "$expected_requests" "$run" <<'PY'
 import json, sys
 from pathlib import Path
-log=Path(sys.argv[1]); failures=int(sys.argv[2]); run=Path(sys.argv[3])
+log=Path(sys.argv[1]); expected=int(sys.argv[2]); run=Path(sys.argv[3])
 requests=[json.loads(line) for line in log.read_text().splitlines()]
-assert len(requests) >= failures + 2, len(requests)
+assert len(requests) == expected, (len(requests), expected)
 for request in requests:
     body=request["body"]
     assert "temperature" not in body and "top_p" not in body
@@ -54,8 +75,10 @@ assert manifest["usage"]["input_tokens"] is not None, manifest
 PY
 }
 
-run_case pi 0
-run_case opencode 0
-run_case pi 1
-run_case opencode 1
-echo "pinned Pi/OpenCode request, retry, and tool continuation smoke passed"
+agents=(pi opencode); scenarios=(success retry recover)
+[[ "$agent_filter" == all ]] || agents=("$agent_filter")
+[[ "$scenario_filter" == all ]] || scenarios=("$scenario_filter")
+for agent in "${agents[@]}"; do
+  for scenario in "${scenarios[@]}"; do run_case "$agent" "$scenario"; done
+done
+echo "pinned Pi/OpenCode exact request, retry, and tool-error recovery smoke passed"

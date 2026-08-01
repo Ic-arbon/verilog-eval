@@ -93,14 +93,17 @@ mode-0600 `--run-path-file`. Do not infer it from build-directory naming.
 - Agent, model, thinking, and toolset;
 - exact selected problems and public/hidden input identities;
 - timeout, turn, tool-call, input, and output budgets;
-- endpoint base URL and credential environment-variable name, never the value;
+- endpoint base URL, exact bounded `/models` response digest, and credential
+  environment-variable name, never the value;
 - source commit, Docker image/daemon identity, projected tools identities and package
   versions, host toolchain/support identities, and Make concurrency;
 - an optional nonce only for `--new-run`.
 
 Machine-local locators are not material identity. They live temporarily in the owned
-mode-0600 `runtime-bindings.json`, are checked against the immutable config, and are
-removed and synced after success or failure. The file never enters a container or report.
+mode-0600 `runtime-bindings.json`, including separate tools-source and projected-tools
+locators. Their executable, support-file, image/daemon, source/input, lock, source-tree,
+and projected-tree identities are rechecked against the immutable config before configure.
+The bindings are removed and synced after success or failure. The file never enters a container or report.
 
 Ordinary identical invocation resumes the same run. `--new-run` records a nonce and a
 durable recovery receipt. Recovery commands are:
@@ -214,4 +217,6 @@ tests/integration/agent-openai-request-smoke
 ```
 
 The formal 156-sample acceptance run uses `--run-path-file` and validates the resulting
-path with `scripts/validate-agent-run`.
+path with `scripts/validate-agent-run`. Selected public and hidden inputs are rehashed
+after grading and before report publication; any persistent mutation is infrastructure
+failure.

@@ -105,7 +105,7 @@ def _validate_endpoint(value: Any) -> None:
     endpoint = _mapping(
         value,
         "endpoint",
-        {"base_url", "api_key_environment"},
+        {"base_url", "api_key_environment", "models_response_sha256"},
     )
     base_url = _string(endpoint["base_url"], "endpoint.base_url")
     parsed = urlsplit(base_url)
@@ -117,6 +117,10 @@ def _validate_endpoint(value: Any) -> None:
         _string(endpoint["api_key_environment"], "endpoint.api_key_environment")
     ) is None:
         raise RunConfigError("endpoint.api_key_environment is invalid")
+    _digest(
+        endpoint["models_response_sha256"],
+        "endpoint.models_response_sha256",
+    )
 
 
 def _validate_benchmark(value: Any) -> None:

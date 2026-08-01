@@ -172,6 +172,11 @@ def generate_agent_sample(
     except ToolsProjectionError as error:
         raise DockerInfrastructureError(f"Agent tools projection is invalid: {error}") from error
     evidence = _endpoint_evidence(run_dir)
+    if (
+        evidence["response_sha256"]
+        != config["endpoint"]["models_response_sha256"]
+    ):
+        raise SampleRequestError("endpoint evidence does not match run identity")
     key_name = config["endpoint"]["api_key_environment"]
     credential = credential_client(
         run_dir=run_dir,

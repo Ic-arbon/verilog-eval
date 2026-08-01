@@ -51,12 +51,20 @@ from agent_generation.runtime_bindings import (
     remove_runtime_bindings,
     validate_runtime_bindings,
 )
-from agent_generation.sample_result import SampleInfrastructureError, validate_sample_bundle
+from agent_generation.sample_result import (
+    SampleInfrastructureError,
+    inspect_sample_bundle_state,
+)
 from agent_generation.task import selected_rules
-from agent_generation.tools import ToolsProjectionError, project_agent_tools
+from agent_generation.tools import (
+    ToolsProjectionError,
+    project_agent_tools,
+    validate_tools_projection,
+)
 
 
 _POSITIVE_INTEGER = re.compile(r"[1-9][0-9]*")
+_MAKE_SAFE_LOCATOR = re.compile(r"/[A-Za-z0-9._/@+=-]*")
 _DEFAULTS = {
     "agent": "opencode",
     "model": "qwen3.6-coder",
@@ -75,6 +83,25 @@ _DEFAULTS = {
     "api_key_environment": "OPENAI_API_KEY",
 }
 _MATERIAL_DESTINATIONS = frozenset(_DEFAULTS)
+_FORMAL_ENVIRONMENT_NAMES = frozenset(
+    {
+        "PATH",
+        "SSL_CERT_FILE",
+        "DOCKER_HOST",
+        "VERILOG_EVAL_ROOT",
+        "VERILOG_EVAL_BUILD_ROOT",
+        "VERILOG_EVAL_DATASET",
+        "VERILOG_EVAL_PROBLEMS",
+        "VERILOG_EVAL_CACHE_ROOT",
+        "VERILOG_EVAL_JOBS",
+        "AGENT_EVAL_AGENT_TOOLS",
+        "AGENT_EVAL_DOCKER",
+        "AGENT_EVAL_DOCKER_IMAGE_STANDARD",
+        "AGENT_EVAL_DOCKER_ARCHIVE_STANDARD",
+        "AGENT_EVAL_DOCKER_IMAGE_RTL",
+        "AGENT_EVAL_DOCKER_ARCHIVE_RTL",
+    }
+)
 
 
 class RunnerError(RuntimeError):
@@ -273,6 +300,8 @@ def parse_runner_options(
                 "material options are forbidden with --resume: " + ", ".join(overrides)
             )
         resume_config = namespace.resume.resolve()
+        if _MAKE_SAFE_LOCATOR.fullmatch(str(resume_config)) is None:
+            parser.error("resume config path is not Make-safe")
         try:
             config = load_run_config(resume_config)
         except ValueError as error:
@@ -311,31 +340,47 @@ def parse_runner_options(
         or credential_environment.endswith("_PROXY")
         or credential_environment
         in {
-        "PATH",
-        "HOME",
-        "SHELL",
-        "LANG",
-        "LC_ALL",
-        "DOCKER_HOST",
-        "PYTHONPATH",
-        "BASH_ENV",
-        "ENV",
-        "NODE_OPTIONS",
-        "VERILOG_EVAL_JOBS",
-        "VERILOG_EVAL_ROOT",
-        "AGENT_EVAL_AGENT_TOOLS",
+            "PATH",
+            "HOME",
+            "SHELL",
+            "LANG",
+            "LC_ALL",
+            "DOCKER_HOST",
+            "PYTHONPATH",
+            "BASH_ENV",
+            "ENV",
+            "NODE_OPTIONS",
+            "VERILOG_EVAL_JOBS",
+            "VERILOG_EVAL_ROOT",
+            "AGENT_EVAL_AGENT_TOOLS",
         }
     ):
         parser.error("credential environment name collides with structural runtime state")
 
-    def locator(argument, environment_name: str) -> Optional[Path]:
-        if argument is not None:
-            return Path(argument).resolve()
-        value = environ.get(environment_name)
-        return Path(value).resolve() if value else None
+    def locator(
+        argument,
+        environment_name: str,
+        *,
+        require_make_safe: bool = False,
+    ) -> Optional[Path]:
+        value = argument if argument is not None else environ.get(environment_name)
+        if value is None or value == "":
+            return None
+        resolved = Path(value).resolve()
+        if require_make_safe and _MAKE_SAFE_LOCATOR.fullmatch(str(resolved)) is None:
+            parser.error(f"{environment_name} is not a Make-safe locator")
+        return resolved
 
-    source_root = locator(namespace.source_root, "VERILOG_EVAL_ROOT")
-    build_root = locator(namespace.build_root, "VERILOG_EVAL_BUILD_ROOT")
+    source_root = locator(
+        namespace.source_root,
+        "VERILOG_EVAL_ROOT",
+        require_make_safe=True,
+    )
+    build_root = locator(
+        namespace.build_root,
+        "VERILOG_EVAL_BUILD_ROOT",
+        require_make_safe=True,
+    )
     if build_root is None and source_root is not None and mode != "resume":
         build_root = source_root / "build"
 
@@ -344,8 +389,16 @@ def parse_runner_options(
         resume_config=resume_config,
         jobs=resolved_jobs,
         source_root=source_root,
-        dataset_dir=locator(namespace.dataset_dir, "VERILOG_EVAL_DATASET"),
-        problems_file=locator(namespace.problems_file, "VERILOG_EVAL_PROBLEMS"),
+        dataset_dir=locator(
+            namespace.dataset_dir,
+            "VERILOG_EVAL_DATASET",
+            require_make_safe=True,
+        ),
+        problems_file=locator(
+            namespace.problems_file,
+            "VERILOG_EVAL_PROBLEMS",
+            require_make_safe=True,
+        ),
         build_root=build_root,
         agent_tools=locator(namespace.agent_tools, "AGENT_EVAL_AGENT_TOOLS"),
         docker_path=locator(namespace.docker_path, "AGENT_EVAL_DOCKER"),
@@ -716,6 +769,16 @@ def collect_preparation_evidence(
         "python": Path(sys.executable).resolve(strict=True),
         "docker": docker_path,
         "git": git_path,
+        "shebang-env": _resolved_executable(
+            "shebang-env",
+            explicit=Path("/usr/bin/env"),
+            path_environment=path_environment,
+        ),
+        "configure-sh": _resolved_executable(
+            "configure-sh",
+            explicit=Path("/bin/sh"),
+            path_environment=path_environment,
+        ),
     }
     for executable_name in (
         "bash",
@@ -815,6 +878,7 @@ def collect_preparation_evidence(
             "image": image,
             "archive": str(archive),
         },
+        "tools_source": str(Path(tools_prefix).resolve(strict=True)),
         "tools_projection": str(projection.path),
         "toolchain": {name: str(path) for name, path in executables.items()},
         "support_files": support_bindings,
@@ -838,6 +902,41 @@ def collect_preparation_evidence(
         ),
         credential,
     )
+
+
+def verify_selected_inputs(config: Mapping, bindings: Mapping) -> None:
+    """Recheck every selected input identity before accepting grading evidence."""
+
+    source = Path(bindings["source_root"])
+    dataset = Path(bindings["dataset_dir"])
+    problems_file = Path(bindings["problems_file"])
+    for expected in config["benchmark"]["inputs"]:
+        kind = expected["kind"]
+        name = expected["name"]
+        if kind == "problem_list":
+            path = problems_file
+        elif kind == "example":
+            path = source / "scripts" / name
+        elif kind == "rules":
+            rules_text = selected_rules(
+                config["benchmark"]["task"],
+                config["benchmark"]["rules"],
+            )
+            content = b"" if rules_text is None else rules_text.encode("utf-8")
+            actual = {
+                "kind": kind,
+                "name": name,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size_bytes": len(content),
+            }
+            if actual != expected:
+                raise RunnerError("selected rules identity changed")
+            continue
+        else:
+            path = dataset / name
+        actual = _file_input_identity(path, kind=kind, name=name)
+        if actual != expected:
+            raise RunnerError(f"selected benchmark input changed: {name}")
 
 
 def _material_config(
@@ -864,6 +963,9 @@ def _material_config(
         "endpoint": {
             "base_url": options.base_url,
             "api_key_environment": options.api_key_environment,
+            "models_response_sha256": evidence.endpoint_evidence[
+                "response_sha256"
+            ],
         },
         "limits": {
             "timeout_seconds": options.timeout_seconds,
@@ -962,6 +1064,21 @@ def prepare_run(
 
 def _base_environment(path: str) -> dict[str, str]:
     return {"PATH": path, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+
+
+def formal_runner_environment(
+    ambient: Mapping[str, str],
+    *,
+    api_key_environment: str,
+) -> dict[str, str]:
+    """Admit only formal bindings plus the explicitly selected credential."""
+
+    admitted = _FORMAL_ENVIRONMENT_NAMES | {api_key_environment}
+    return {
+        name: value
+        for name, value in ambient.items()
+        if name in admitted and isinstance(value, str)
+    }
 
 
 def runner_environment(
@@ -1081,10 +1198,110 @@ def _publish_endpoint_evidence(prepared: PreparedRun) -> Path:
     return path
 
 
+def validate_runtime_material_identity(prepared: PreparedRun) -> None:
+    """Bind every ephemeral locator back to the immutable material identity."""
+
+    bindings = prepared.bindings
+    expected_toolchain = {
+        item["name"]: item for item in prepared.config["runtime"]["toolchain"]
+    }
+    actual_names = set(bindings["toolchain"])
+    if actual_names != set(expected_toolchain):
+        raise RunnerError("runtime toolchain locator set does not match run config")
+    try:
+        actual_toolchain = {
+            name: executable_identity(name, Path(path))
+            for name, path in bindings["toolchain"].items()
+        }
+        for name, expected in expected_toolchain.items():
+            if actual_toolchain[name] != expected:
+                raise RunnerError(f"runtime executable identity changed: {name}")
+
+        for expected in prepared.config["runtime"]["support_files"]:
+            key = expected["name"].replace("-", "_")
+            locator = bindings["support_files"].get(key)
+            if locator is None or support_file_identity(
+                expected["name"], Path(locator)
+            ) != expected:
+                raise RunnerError(
+                    f"runtime support-file identity changed: {expected['name']}"
+                )
+
+        projection_path = Path(bindings["tools_projection"])
+        reprojection = project_agent_tools(
+            Path(bindings["tools_source"]),
+            projection_path.parent,
+            prepared.config["agent"]["name"],
+        )
+        expected_tools = prepared.config["runtime"]["agent_tools"]
+        if (
+            reprojection.path != projection_path
+            or reprojection.content_sha256 != expected_tools["content_sha256"]
+            or reprojection.source_content_sha256
+            != expected_tools["source_content_sha256"]
+            or reprojection.lock_sha256 != expected_tools["lock_sha256"]
+            or reprojection.versions != expected_tools["versions"]
+        ):
+            raise RunnerError("runtime Agent tools source identity changed")
+        validate_tools_projection(
+            projection_path,
+            expected_tools["content_sha256"],
+        )
+    except (AgentToolsError, ToolsProjectionError, OSError) as error:
+        raise RunnerError(f"runtime material identity validation failed: {error}") from error
+
+    docker = bindings["docker"]
+    docker_env = docker_environment(
+        docker_host=docker["daemon"],
+        path=str(Path(docker["client"]).parent),
+    )
+    image_id = _run_checked(
+        (
+            docker["client"],
+            "image",
+            "inspect",
+            "--format",
+            "{{.Id}}",
+            docker["image"],
+        ),
+        environment=docker_env,
+    ).stdout.strip()
+    if image_id != prepared.config["runtime"]["docker_image_id"]:
+        raise RunnerError("runtime Docker image identity changed")
+    try:
+        daemon = docker_daemon_identity(
+            docker["client"],
+            environment=docker_env,
+        )
+    except AgentToolsError as error:
+        raise RunnerError(f"runtime Docker daemon identity failed: {error}") from error
+    if daemon != prepared.config["runtime"]["docker_daemon_identity"]:
+        raise RunnerError("runtime Docker daemon identity changed")
+
+    git = bindings["toolchain"]["git"]
+    assert_clean_source(
+        Path(bindings["source_root"]),
+        allowed_roots=(
+            Path(bindings["build_dir"]),
+            Path(bindings["tools_source"]),
+            Path(bindings["tools_projection"]),
+        ),
+        git_path=git,
+    )
+    revision = _run_checked(
+        (git, "-C", bindings["source_root"], "rev-parse", "HEAD"),
+        environment=_base_environment(str(Path(git).parent)),
+    ).stdout.strip()
+    if revision != prepared.config["runtime"]["source_commit"]:
+        raise RunnerError("runtime source revision changed")
+    verify_selected_inputs(prepared.config, bindings)
+
+
 def _pinned_path(bindings: Mapping) -> str:
     directories = {
         str(Path(path).parent)
-        for path in bindings["toolchain"].values()
+        for name, path in bindings["toolchain"].items()
+        if name not in {"shebang-env", "configure-sh"}
     }
     directories.add(str(Path(bindings["docker"]["client"]).parent))
     return os.pathsep.join(sorted(directories))
@@ -1103,11 +1320,16 @@ def _validate_existing_bundles(prepared: PreparedRun) -> None:
     for sample_id in _expected_sample_ids(prepared.config):
         problem = sample_id.rsplit("_sample", 1)[0]
         output = run_dir / problem / f"{sample_id}.sv"
-        if output.exists() or output.is_symlink():
-            try:
-                validate_sample_bundle(output, prepared.digest)
-            except SampleInfrastructureError as error:
-                raise RunnerError(f"existing Sample Bundle is corrupt: {sample_id}") from error
+        try:
+            inspect_sample_bundle_state(
+                output,
+                prepared.digest,
+                remove_valid_partial=True,
+            )
+        except SampleInfrastructureError as error:
+            raise RunnerError(
+                f"existing or partial Sample Bundle is corrupt: {sample_id}"
+            ) from error
 
 
 def _remove_empty_runtime_directory(path: Path) -> None:
@@ -1209,6 +1431,7 @@ def execute_prepared_run(
     *,
     command_runner: Callable = subprocess.run,
     broker_factory: Callable = CredentialBroker,
+    material_validator: Callable[[PreparedRun], None] = validate_runtime_material_identity,
 ) -> Path:
     """Hold one run lock while configure and GNU Make execute exactly once."""
 
@@ -1218,6 +1441,7 @@ def execute_prepared_run(
         if existing is not None:
             return existing
         _validate_existing_bundles(prepared)
+        material_validator(prepared)
         _remove_regular_marker(run_dir / "agent-summary.json")
         _publish_endpoint_evidence(prepared)
         try:
@@ -1278,13 +1502,25 @@ def execute_prepared_run(
                     cwd=run_dir,
                     environment=make_env,
                 )
+            verify_selected_inputs(prepared.config, bindings)
         finally:
-            _remove_empty_runtime_directory(configure_home)
-            _remove_empty_runtime_directory(run_dir / ".agent-work")
+            cleanup_errors: list[str] = []
             try:
                 remove_runtime_bindings(prepared.config_path)
             except RuntimeBindingError as error:
-                raise RunnerError(f"runtime bindings cleanup failed: {error}") from error
+                cleanup_errors.append(f"runtime bindings: {error}")
+            for runtime_directory in (
+                configure_home,
+                run_dir / ".agent-work",
+            ):
+                try:
+                    _remove_empty_runtime_directory(runtime_directory)
+                except (OSError, RunnerError) as error:
+                    cleanup_errors.append(f"{runtime_directory.name}: {error}")
+            if cleanup_errors:
+                raise RunnerError(
+                    "runtime cleanup failed: " + "; ".join(cleanup_errors)
+                )
 
         summary = run_dir / "summary.csv"
         report = build_agent_report(
@@ -1395,6 +1631,13 @@ def main(
     environ = dict(os.environ if environment is None else environment)
     try:
         options = parse_runner_options(argv, environment=environ)
+        environ = formal_runner_environment(
+            environ,
+            api_key_environment=options.api_key_environment,
+        )
+        if environment is None:
+            os.environ.clear()
+            os.environ.update(environ)
         if options.management_action == "contamination":
             source = options.source_root
             if source is None:

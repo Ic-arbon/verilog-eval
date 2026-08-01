@@ -184,6 +184,16 @@ class SampleResultTransactionTests(unittest.TestCase):
             with self.assertRaises(SampleInfrastructureError):
                 self.commit(root)
 
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self.commit(root)
+            output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
+            paths = sample_sidecar_paths(output)
+            output.unlink()
+            paths["trajectory"].write_text("mismatched partial trajectory\n")
+            with self.assertRaises(SampleInfrastructureError):
+                self.commit(root)
+
     def test_catchable_failure_after_candidate_rename_removes_completion_marker(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

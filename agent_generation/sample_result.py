@@ -231,7 +231,14 @@ def validate_sample_bundle(
     return manifest
 
 
-def _recover_before_generation(output_path: Path, config_digest: str) -> Optional[dict]:
+def inspect_sample_bundle_state(
+    output_path: Path,
+    config_digest: str,
+    *,
+    remove_valid_partial: bool,
+) -> Optional[dict]:
+    """Validate completion or bounded partial sidecars before any regeneration."""
+
     output = Path(output_path)
     sidecars = sample_sidecar_paths(output)
     try:
@@ -247,26 +254,52 @@ def _recover_before_generation(output_path: Path, config_digest: str) -> Optiona
             raise SampleInfrastructureError("candidate completion marker is unsafe")
         return validate_sample_bundle(output, config_digest)
 
-    present: list[Path] = []
-    for path in sidecars.values():
+    maxima = {
+        "manifest": 4 * 1024 * 1024,
+        "trajectory": 256 * 1024 * 1024,
+        "stderr": 64 * 1024 * 1024,
+    }
+    present: dict[str, tuple[Path, bytes]] = {}
+    for name, path in sidecars.items():
         try:
-            metadata = path.lstat()
+            path.lstat()
         except FileNotFoundError:
             continue
-        if (
-            not stat.S_ISREG(metadata.st_mode)
-            or metadata.st_uid != os.geteuid()
-            or metadata.st_nlink != 1
-        ):
-            raise SampleInfrastructureError("partial sample sidecar is suspicious")
-        present.append(path)
-    if present:
+        present[name] = (path, _read_regular_bytes(path, maxima[name]))
+
+    partial_manifest = None
+    if "manifest" in present:
+        manifest_bytes = present["manifest"][1]
+        try:
+            partial_manifest = json.loads(manifest_bytes.decode("utf-8"))
+            validate_result_manifest(
+                partial_manifest,
+                expected_sample_id=output.stem,
+                expected_run_config_sha256=config_digest,
+            )
+            if canonical_generation_manifest(partial_manifest) != manifest_bytes:
+                raise ResultContractError("partial manifest bytes are not canonical")
+        except (UnicodeDecodeError, ValueError) as error:
+            raise SampleInfrastructureError(
+                f"partial sample manifest is suspicious: {error}"
+            ) from error
+        for artifact_name in ("trajectory", "stderr"):
+            if artifact_name in present and partial_manifest["artifacts"][artifact_name] != _artifact(
+                present[artifact_name][1]
+            ):
+                raise SampleInfrastructureError(
+                    f"partial sample {artifact_name} does not match manifest"
+                )
+
+    if present and remove_valid_partial:
         directory_descriptor = os.open(
             output.parent,
-            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+            os.O_RDONLY
+            | getattr(os, "O_DIRECTORY", 0)
+            | getattr(os, "O_NOFOLLOW", 0),
         )
         try:
-            for path in present:
+            for path, _content in present.values():
                 os.unlink(path.name, dir_fd=directory_descriptor)
             os.fsync(directory_descriptor)
         except OSError as error:
@@ -345,7 +378,11 @@ def commit_sample_bundle(
             fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as error:
             raise SampleInfrastructureError("sample target is already active") from error
-        existing = _recover_before_generation(output, run_config_sha256)
+        existing = inspect_sample_bundle_state(
+            output,
+            run_config_sha256,
+            remove_valid_partial=True,
+        )
         if existing is not None:
             return existing
 

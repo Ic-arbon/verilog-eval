@@ -52,6 +52,7 @@ def valid_config() -> dict:
         "endpoint": {
             "base_url": "http://127.0.0.1:58000/v1",
             "api_key_environment": "OPENAI_API_KEY",
+            "models_response_sha256": DIGEST_A,
         },
         "limits": {
             "timeout_seconds": 300,

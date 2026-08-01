@@ -186,6 +186,9 @@ def _copy_tree(source: Path, destination: Path, selected_roots: tuple[Path, ...]
         source_path = Path(entry.path)
         destination_path = destination / entry.name
         metadata = entry.stat(follow_symlinks=False)
+        if entry.name == "node_modules" and stat.S_ISDIR(metadata.st_mode):
+            # Nested packages are copied only by their own lock-selected root.
+            continue
         if stat.S_ISLNK(metadata.st_mode):
             target = os.readlink(source_path)
             resolved = (source_path.parent / target).resolve(strict=False)

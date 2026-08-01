@@ -290,9 +290,13 @@ def _canonical_rows(summary_csv: Path) -> list[tuple[str, int, int, str]]:
     seen: set[str] = set()
     with summary_file:
         for line_number, row in enumerate(csv.reader(summary_file), 1):
-            if len(row) != 5:
+            if len(row) < 5:
                 raise ReportError(f"invalid canonical summary row {line_number}")
-            problem, passed_text, sample_count_text, rate_text, statuses = row
+            problem, passed_text, sample_count_text, rate_text = row[:4]
+            status_fields = row[4:]
+            if any(len(status) != 1 for status in status_fields):
+                raise ReportError(f"invalid canonical status on row {line_number}")
+            statuses = "".join(status_fields)
             if (
                 not problem
                 or Path(problem).name != problem
@@ -337,8 +341,10 @@ def build_agent_report(
     summary_path = Path(summary_csv)
     root = summary_path.parent
     rows = _canonical_rows(summary_path)
-    if expected_problems is not None and [row[0] for row in rows] != list(expected_problems):
-        raise ReportError("canonical summary problem set/order does not match run config")
+    if expected_problems is not None and [row[0] for row in rows] != sorted(
+        expected_problems
+    ):
+        raise ReportError("canonical summary problem set/order does not match grader order")
     samples: list[dict[str, Any]] = []
     common_identity = None
     for problem, _passed, sample_count, statuses in rows:

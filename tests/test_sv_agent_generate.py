@@ -86,6 +86,7 @@ class AgentSampleFixture:
 
         config = valid_config()
         config["agent"].update(name="opencode", toolset="standard")
+        config["endpoint"]["models_response_sha256"] = "5" * 64
         config["benchmark"]["inputs"] = [
             {
                 "kind": "problem_list",
@@ -142,6 +143,7 @@ class AgentSampleFixture:
                 "image": "verilog-eval-agent-sandbox:standard",
                 "archive": str(root / "image.tar"),
             },
+            "tools_source": str(root / "tools-source"),
             "tools_projection": str(projection.path),
             "toolchain": {
                 "bash": str(root / "bin/bash"),

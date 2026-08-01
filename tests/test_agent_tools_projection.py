@@ -15,7 +15,8 @@ def make_tools(root: Path) -> Path:
     shared = tools / "node_modules" / "shared"
     unrelated = tools / "node_modules" / "unrelated"
     bins = tools / "node_modules" / ".bin"
-    for path in (agent, shared, unrelated, bins):
+    stale_nested = agent / "node_modules" / "stale-package"
+    for path in (agent, shared, unrelated, bins, stale_nested):
         path.mkdir(parents=True, exist_ok=True)
     (agent / "cli.js").write_text("require('shared')\n", encoding="utf-8")
     (agent / "package.json").write_text(
@@ -29,6 +30,7 @@ def make_tools(root: Path) -> Path:
     (unrelated / "package.json").write_text(
         json.dumps({"name": "unrelated", "version": "9.0.0"}), encoding="utf-8"
     )
+    (stale_nested / "index.js").write_text("stale and unlocked\n", encoding="utf-8")
     (bins / "opencode").symlink_to("../opencode-ai/cli.js")
     (bins / "unrelated").symlink_to("../unrelated/secret-tool")
     lock = {
@@ -63,6 +65,9 @@ class ToolsProjectionTests(unittest.TestCase):
             self.assertTrue((projection.path / "node_modules/opencode-ai/cli.js").is_file())
             self.assertTrue((projection.path / "node_modules/shared/index.js").is_file())
             self.assertFalse((projection.path / "node_modules/unrelated").exists())
+            self.assertFalse(
+                (projection.path / "node_modules/opencode-ai/node_modules/stale-package").exists()
+            )
             self.assertTrue((projection.path / "node_modules/.bin/opencode").is_symlink())
             self.assertFalse((projection.path / "node_modules/.bin/unrelated").exists())
             self.assertRegex(projection.content_sha256, r"^[0-9a-f]{64}$")

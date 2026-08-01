@@ -31,6 +31,7 @@ def bindings(root: Path) -> dict:
             "image": "verilog-eval-agent-sandbox:base",
             "archive": str(root / "image.tar"),
         },
+        "tools_source": str(root / "tools-source"),
         "tools_projection": str(root / "projection"),
         "toolchain": {
             "bash": str(root / "bin" / "bash"),

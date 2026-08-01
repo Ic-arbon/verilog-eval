@@ -16,11 +16,13 @@ from agent_generation.run import (
     configure_environment,
     docker_environment,
     execute_prepared_run,
+    formal_runner_environment,
     make_environment,
     manage_recovery,
     parse_runner_options,
     prepare_run,
     runner_environment,
+    verify_selected_inputs,
 )
 from agent_generation.provenance import (
     docker_daemon_identity,
@@ -53,6 +55,20 @@ class RunnerCliStateTests(unittest.TestCase):
         for option in ("--with-temperature=0.6", "--with-top-p=0.95"):
             with self.subTest(option=option), self.assertRaises(SystemExit):
                 parse_runner_options([option], environment={})
+
+    def test_make_visible_locators_fail_closed_before_preparation(self):
+        for locator in (
+            "/tmp/contains space",
+            "/tmp/contains#comment",
+            "/tmp/contains$make",
+            "/tmp/contains%pattern",
+            "/tmp/contains\nnewline",
+        ):
+            with self.subTest(locator=locator), self.assertRaises(SystemExit):
+                parse_runner_options(
+                    [f"--source-root={locator}"],
+                    environment={},
+                )
 
     def test_new_run_and_resume_are_mutually_exclusive(self):
         with self.assertRaises(SystemExit):
@@ -261,6 +277,27 @@ class SourceAndInputIdentityTests(unittest.TestCase):
             self.assertNotIn("make ", command_log)
 
 
+    def test_selected_inputs_are_rechecked_before_report_acceptance(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            helper = RunPreparationTests()
+            prepared = prepare_run(
+                helper.options(root),
+                helper.evidence(root),
+                credential="secret",
+            )
+            dataset = Path(prepared.bindings["dataset_dir"])
+            dataset.mkdir(parents=True)
+            Path(prepared.bindings["problems_file"]).write_text("Prob001_zero\n")
+            hidden = dataset / "Prob001_zero_test.sv"
+            hidden.write_text("test\n")
+
+            verify_selected_inputs(prepared.config, prepared.bindings)
+            hidden.write_text("changed after grading\n")
+            with self.assertRaises(RunnerError):
+                verify_selected_inputs(prepared.config, prepared.bindings)
+
+
 class HostIdentityTests(unittest.TestCase):
     def test_executable_and_support_identities_are_content_not_path_based(self):
         with tempfile.TemporaryDirectory() as first_tmp, tempfile.TemporaryDirectory() as second_tmp:
@@ -311,14 +348,14 @@ class RunPreparationTests(unittest.TestCase):
                 {
                     "kind": "problem_list",
                     "name": "problems.txt",
-                    "sha256": "a" * 64,
+                    "sha256": "488cf274ebb5572dba9d1da38ef92dc545a58c4cd03ad394c06d0e12526ef812",
                     "size_bytes": 13,
                 },
                 {
                     "kind": "hidden_test",
                     "name": "Prob001_zero_test.sv",
-                    "sha256": "b" * 64,
-                    "size_bytes": 42,
+                    "sha256": "f2ca1bb6c7e907d06dafe4687e579fce76b37e4e93b7605022da52e6ccc26fd2",
+                    "size_bytes": 5,
                 },
             ),
             docker_image_id="sha256:" + "2" * 64,
@@ -346,6 +383,7 @@ class RunPreparationTests(unittest.TestCase):
                     "image": "verilog-eval-agent-sandbox:standard",
                     "archive": str(root / "image.tar"),
                 },
+                "tools_source": str(root / "tools-source"),
                 "tools_projection": str(root / "projection"),
                 "toolchain": {
                     "bash": str(root / "bin/bash"),
@@ -441,6 +479,10 @@ class RunExecutionTests(unittest.TestCase):
         helper = RunPreparationTests()
         options = helper.options(root)
         prepared = prepare_run(options, helper.evidence(root), credential="secret")
+        dataset = Path(prepared.bindings["dataset_dir"])
+        dataset.mkdir(parents=True)
+        Path(prepared.bindings["problems_file"]).write_text("Prob001_zero\n")
+        (dataset / "Prob001_zero_test.sv").write_text("test\n")
         return options, prepared
 
     def test_runner_invokes_configure_and_make_once_then_reports_after_broker_stop(self):
@@ -452,7 +494,7 @@ class RunExecutionTests(unittest.TestCase):
             root = Path(tmp)
             options, prepared = self.prepared_fixture(root)
             source = Path(prepared.bindings["source_root"])
-            source.mkdir(parents=True)
+            source.mkdir(parents=True, exist_ok=True)
             configure = source / "configure"
             configure.write_text("#!/bin/sh\nexit 0\n")
             configure.chmod(0o755)
@@ -529,6 +571,7 @@ class RunExecutionTests(unittest.TestCase):
                 options,
                 command_runner=command_runner,
                 broker_factory=Broker,
+                material_validator=lambda _prepared: None,
             )
 
             self.assertEqual([Path(call[0][0]).name for call in calls], ["configure", "make"])
@@ -552,7 +595,7 @@ class RunExecutionTests(unittest.TestCase):
             root = Path(tmp)
             options, prepared = self.prepared_fixture(root)
             source = Path(prepared.bindings["source_root"])
-            source.mkdir(parents=True)
+            source.mkdir(parents=True, exist_ok=True)
             configure = source / "configure"
             configure.write_text("#!/bin/sh\nexit 0\n")
             configure.chmod(0o755)
@@ -562,9 +605,13 @@ class RunExecutionTests(unittest.TestCase):
                 def __enter__(self): return self
                 def __exit__(self, *_args): pass
 
-            def runner(command, **_kwargs):
-                code = 7 if Path(command[0]).name == "make" else 0
-                return subprocess.CompletedProcess(command, code)
+            def runner(command, **kwargs):
+                if Path(command[0]).name == "make":
+                    work = Path(kwargs["cwd"]) / ".agent-work"
+                    work.mkdir(exist_ok=True)
+                    (work / "crash-remnant").write_text("partial\n")
+                    return subprocess.CompletedProcess(command, 7)
+                return subprocess.CompletedProcess(command, 0)
 
             with self.assertRaises(RunnerError):
                 execute_prepared_run(
@@ -572,12 +619,35 @@ class RunExecutionTests(unittest.TestCase):
                     options,
                     command_runner=runner,
                     broker_factory=Broker,
+                    material_validator=lambda _prepared: None,
                 )
             self.assertFalse((prepared.config_path.parent / "agent-summary.json").exists())
             self.assertFalse(prepared.config_path.with_name("runtime-bindings.json").exists())
 
 
 class ClosedEnvironmentTests(unittest.TestCase):
+    def test_formal_runner_environment_is_an_allowlist(self):
+        result = formal_runner_environment(
+            {
+                "PATH": "/pinned/bin",
+                "VERILOG_EVAL_ROOT": "/source",
+                "CUSTOM_API_KEY": "secret",
+                "OPENAI_API_KEY": "unselected-secret",
+                "OTHER_SECRET": "leak",
+                "HTTP_PROXY": "http://proxy",
+                "BASH_ENV": "/leak",
+            },
+            api_key_environment="CUSTOM_API_KEY",
+        )
+        self.assertEqual(
+            result,
+            {
+                "PATH": "/pinned/bin",
+                "VERILOG_EVAL_ROOT": "/source",
+                "CUSTOM_API_KEY": "secret",
+            },
+        )
+
     def test_runner_environment_keeps_only_explicit_inputs_and_selected_secret(self):
         ambient = {
             "PATH": "/ambient/bin",

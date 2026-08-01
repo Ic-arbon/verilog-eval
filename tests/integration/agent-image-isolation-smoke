@@ -1,60 +1,86 @@
 #!/usr/bin/env bash
 set -euo pipefail
 root="${VERILOG_EVAL_ROOT:-$(git rev-parse --show-toplevel)}"
-for program in nix python3; do command -v "$program" >/dev/null || exit 2; done
+for program in nix python3 docker; do command -v "$program" >/dev/null || exit 2; done
 scratch="$(mktemp -d "${TMPDIR:-/tmp}/agent-image-isolation.XXXXXX")"
 stamp="image-canary-$$-$(date +%s)"
-canary_a="$root/.agent-image-canary-$stamp"
-canary_b="$root/dataset_spec-to-rtl/.agent-image-hidden-$stamp"
-cleanup(){ rm -f "$canary_a" "$canary_b"; rm -rf "$scratch"; }
+canaries=(
+  "$root/.agent-image-root-$stamp"
+  "$root/.agent-image-config-$stamp.json"
+  "$root/dataset_spec-to-rtl/.agent-image-public-$stamp.txt"
+  "$root/dataset_spec-to-rtl/.agent-image-hidden-$stamp.sv"
+  "$root/build/.agent-image-result-$stamp.json"
+)
+containers=()
+cleanup(){
+  ((${#containers[@]} == 0)) || docker rm -f "${containers[@]}" >/dev/null 2>&1 || true
+  rm -f "${canaries[@]}"
+  rm -rf "$scratch"
+}
 trap cleanup EXIT INT TERM
-printf '%s-root\n' "$stamp" >"$canary_a"
-printf '%s-hidden\n' "$stamp" >"$canary_b"
+mkdir -p "$root/build"
+for index in "${!canaries[@]}"; do printf '%s-%s\n' "$stamp" "$index" >"${canaries[$index]}"; done
 
-for output in agent-sandbox-image agent-rtl-sandbox-image; do
-  link="$scratch/$output"
-  nix build "path:$root#$output" --out-link "$link"
-  python3 - "$link" "$stamp" <<'PY'
+scanner="$scratch/scan-image.py"
+cat >"$scanner" <<'PY'
 import sys, tarfile, tempfile
 from pathlib import Path
-archive=Path(sys.argv[1]).resolve(); canary=sys.argv[2].encode()
-forbidden=(b"dataset_spec-to-rtl", b"run-config.json", b"_ref.sv", b"_test.sv", b"/.git/")
+archive=Path(sys.argv[1]).resolve(); canary=sys.argv[2].encode(); inventory=sys.argv[3]=="inventory"
+forbidden=(b"dataset_spec-to-rtl", b"run-config.json", b"_ref.sv", b"_test.sv", b"/.git/", b"agent-summary.json")
+allowed_top={".dockerenv","bin","dev","etc","home","lib","lib64","nix","proc","root","run","sys","tmp","usr","var","workspace"}
+required_top={"bin","etc","home","nix","tmp","usr","workspace"}
 
 def checked_copy(stream, destination, label, name):
     overlap=b""
     while True:
         block=stream.read(1024*1024)
         if not block: break
-        assert canary not in overlap+block, (label, name)
-        overlap=(overlap+block)[-max(0, len(canary)-1):]
+        assert canary not in overlap+block, (label,name)
+        overlap=(overlap+block)[-max(0,len(canary)-1):]
         if destination is not None: destination.write(block)
 
-def scan_tar(fileobj, label):
-    with tarfile.open(fileobj=fileobj, mode="r:*") as tar:
+def scan_tar(fileobj,label,collect_top=False):
+    top=set()
+    with tarfile.open(fileobj=fileobj,mode="r:*") as tar:
         for member in tar:
+            clean=member.name.lstrip("./")
+            if collect_top and clean: top.add(clean.split("/",1)[0])
             name=member.name.encode(errors="surrogateescape")
-            assert not any(value in name for value in forbidden), (label, member.name)
-            normalized = b"/" + name.lstrip(b"./")
-            assert not normalized.endswith(
-                (b"/bin/npm", b"/bin/npx", b"/bin/corepack")
-            ), (label, member.name)
-            assert b"/lib/node_modules/npm/" not in normalized, (label, member.name)
+            assert not any(value in name for value in forbidden),(label,member.name)
+            normalized=b"/"+name.lstrip(b"./")
+            assert not normalized.endswith((b"/bin/npm",b"/bin/npx",b"/bin/corepack")),(label,member.name)
+            assert b"/lib/node_modules/npm/" not in normalized,(label,member.name)
             if not member.isfile(): continue
             stream=tar.extractfile(member)
             if stream is None: continue
-            nested=member.name.endswith((".tar", ".tar.gz", ".tgz"))
+            nested=member.name.endswith((".tar",".tar.gz",".tgz"))
             if nested:
                 with tempfile.SpooledTemporaryFile(max_size=16*1024*1024) as target:
-                    checked_copy(stream, target, label, member.name)
-                    target.seek(0)
-                    try: scan_tar(target, f"{label}:{member.name}")
+                    checked_copy(stream,target,label,member.name); target.seek(0)
+                    try: scan_tar(target,f"{label}:{member.name}")
                     except tarfile.ReadError: pass
-            else:
-                checked_copy(stream, None, label, member.name)
+            else: checked_copy(stream,None,label,member.name)
+    return top
 
-with archive.open("rb") as source:
-    scan_tar(source, str(archive))
-print(f"image_archive={archive}")
+with archive.open("rb") as source: top=scan_tar(source,str(archive),inventory)
+if inventory:
+    assert required_top <= top,(required_top-top,top)
+    assert top <= allowed_top,(top-allowed_top,top)
+print(f"image_archive={archive} inventory={sorted(top) if inventory else 'raw-layers'}")
 PY
+
+for record in "agent-sandbox-image:standard" "agent-rtl-sandbox-image:rtl"; do
+  output="${record%%:*}"; tag="${record#*:}"; link="$scratch/$output"
+  nix build "path:$root#$output" --out-link "$link"
+  python3 "$scanner" "$link" "$stamp" raw
+  docker load --input "$link" >/dev/null
+  image="verilog-eval-agent-sandbox:$tag"
+  cid="$(docker create --network=none "$image" /bin/true)"
+  containers+=("$cid")
+  merged="$scratch/$output.merged.tar"
+  docker export --output "$merged" "$cid"
+  docker rm "$cid" >/dev/null
+  containers=()
+  python3 "$scanner" "$merged" "$stamp" inventory
 done
-echo "agent image isolation passed"
+echo "Agent image raw-layer, merged-filesystem, inventory, and canary isolation passed"

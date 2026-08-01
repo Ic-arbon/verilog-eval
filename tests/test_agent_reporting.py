@@ -45,7 +45,7 @@ def process(status: str, sample_number: int, *, known_usage: bool) -> ProcessRes
 
 def make_mixed_run(root: Path) -> Path:
     summary = root / "summary.csv"
-    summary.write_text("Prob001_zero,1,3,0.33,.CS\n")
+    summary.write_text("Prob001_zero,1,3,0.33,.,C,S\n")
     for number, (status, candidate, known) in enumerate(
         (
             ("completed", "module TopModule; endmodule\n", True),

@@ -68,9 +68,11 @@ def tool_call(body):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
-    def __init__(self, address, *, model, log_path, fail_first):
+    def __init__(self, address, *, model, log_path, fail_first, tool_error_first):
         super().__init__(address, Handler)
         self.model=model; self.log_path=log_path; self.fail_first=fail_first
+        self.tool_error_first=tool_error_first
+        self.error_tool_sent=False; self.good_tool_sent=False
         self.chat_count=0; self.lock=threading.Lock()
 
     def record(self, value):
@@ -118,13 +120,25 @@ class Handler(BaseHTTPRequestHandler):
                 return
             messages=body.get("messages",[])
             continued=any(isinstance(message,dict) and message.get("role")=="tool" for message in messages)
-            if continued:
+            name=None; arguments=None
+            with self.server.lock:
+                if self.server.tool_error_first and not self.server.error_tool_sent:
+                    name, arguments=tool_call(body)
+                    if name != "bash": raise ValueError("error-recovery probe requires bash tool")
+                    bad_arguments=json.loads(arguments)
+                    bad_arguments["command"]="exit 7"
+                    arguments=canonical(bad_arguments)
+                    self.server.error_tool_sent=True
+                elif not continued or (self.server.tool_error_first and not self.server.good_tool_sent):
+                    name, arguments=tool_call(body)
+                    self.server.good_tool_sent=True
+            if name is not None:
+                call_id="call_error_probe" if self.server.tool_error_first and not self.server.good_tool_sent else "call_write_artifact"
+                message={"role":"assistant","content":None,"tool_calls":[{"id":call_id,"type":"function","function":{"name":name,"arguments":arguments}}]}
+                finish="tool_calls"
+            else:
                 message={"role":"assistant","content":"Artifact written and verified."}
                 finish="stop"
-            else:
-                name, arguments=tool_call(body)
-                message={"role":"assistant","content":None,"tool_calls":[{"id":"call_write_artifact","type":"function","function":{"name":name,"arguments":arguments}}]}
-                finish="tool_calls"
             response={"id":f"chatcmpl-smoke-{count}","object":"chat.completion","created":1,"model":self.server.model,"choices":[{"index":0,"message":message,"finish_reason":finish}],"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}}
             if body.get("stream") is True:
                 self.send_response(200)
@@ -149,9 +163,16 @@ def main():
     parser.add_argument("--log",type=Path,required=True)
     parser.add_argument("--write-base-url",type=Path,required=True)
     parser.add_argument("--fail-first",type=int,default=0)
+    parser.add_argument("--tool-error-first",action="store_true")
     args=parser.parse_args()
     if args.fail_first < 0: parser.error("--fail-first must be nonnegative")
-    server=Server(("127.0.0.1",0),model=args.model,log_path=args.log,fail_first=args.fail_first)
+    server=Server(
+        ("127.0.0.1",0),
+        model=args.model,
+        log_path=args.log,
+        fail_first=args.fail_first,
+        tool_error_first=args.tool_error_first,
+    )
     args.write_base_url.write_text(f"http://127.0.0.1:{server.server_address[1]}/v1\n")
     os.chmod(args.write_base_url,0o600)
     try: server.serve_forever()

@@ -19,6 +19,7 @@ _TOP_FIELDS = {
     "problems_file",
     "build_dir",
     "docker",
+    "tools_source",
     "tools_projection",
     "toolchain",
     "support_files",
@@ -76,6 +77,7 @@ def validate_runtime_bindings(
         "dataset_dir",
         "problems_file",
         "build_dir",
+        "tools_source",
         "tools_projection",
     ):
         _absolute_path(bindings[field], field)

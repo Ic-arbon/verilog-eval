@@ -382,11 +382,14 @@ class DockerExecutor:
                             "Agent budget event classifier failed"
                         ) from error
                     if event_kind is not None and event_kind not in BUDGET_EVENT_KINDS:
-                        termination_reason = "max_turns"
-                        stderr_lines.append(
-                            "invalid Agent budget event classifier result\n"
+                        identifier = self._container_identifier(cidfile)
+                        try:
+                            self._force_remove(identifier)
+                        finally:
+                            self._stop_client_process(process)
+                        raise DockerInfrastructureError(
+                            "Agent budget event classifier returned an invalid kind"
                         )
-                        break
                     if event_kind == "turn":
                         turns += 1
                         if spec.max_turns is not None and turns >= spec.max_turns:
