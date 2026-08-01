@@ -645,6 +645,7 @@ class ClosedEnvironmentTests(unittest.TestCase):
                 "PATH": "/pinned/bin",
                 "VERILOG_EVAL_ROOT": "/source",
                 "CUSTOM_API_KEY": "secret",
+                "PYTHONDONTWRITEBYTECODE": "1",
             },
         )
 
@@ -671,6 +672,7 @@ class ClosedEnvironmentTests(unittest.TestCase):
                 "HOME": "/private/home",
                 "LANG": "C.UTF-8",
                 "LC_ALL": "C.UTF-8",
+                "PYTHONDONTWRITEBYTECODE": "1",
                 "SSL_CERT_FILE": "/ca.pem",
                 "OPENAI_API_KEY": "secret",
             },

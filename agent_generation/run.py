@@ -1063,7 +1063,12 @@ def prepare_run(
 
 
 def _base_environment(path: str) -> dict[str, str]:
-    return {"PATH": path, "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"}
+    return {
+        "PATH": path,
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
 
 
 def formal_runner_environment(
@@ -1074,11 +1079,13 @@ def formal_runner_environment(
     """Admit only formal bindings plus the explicitly selected credential."""
 
     admitted = _FORMAL_ENVIRONMENT_NAMES | {api_key_environment}
-    return {
+    result = {
         name: value
         for name, value in ambient.items()
         if name in admitted and isinstance(value, str)
     }
+    result["PYTHONDONTWRITEBYTECODE"] = "1"
+    return result
 
 
 def runner_environment(

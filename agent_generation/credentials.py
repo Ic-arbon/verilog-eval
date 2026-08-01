@@ -253,7 +253,13 @@ class CredentialBroker:
         original_environment = dict(os.environ)
         try:
             os.environ.clear()
-            os.environ.update({"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8"})
+            os.environ.update(
+                {
+                    "LANG": "C.UTF-8",
+                    "LC_ALL": "C.UTF-8",
+                    "PYTHONDONTWRITEBYTECODE": "1",
+                }
+            )
             self._process.start()
         finally:
             os.environ.clear()

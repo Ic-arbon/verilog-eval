@@ -269,6 +269,7 @@ environment.update({
     "PATH": "${agentRuntimePath}",
     "LANG": "C.UTF-8",
     "LC_ALL": "C.UTF-8",
+    "PYTHONDONTWRITEBYTECODE": "1",
     "VERILOG_EVAL_ROOT": root,
     "VERILOG_EVAL_CACHE_ROOT": environment.get("VERILOG_EVAL_CACHE_ROOT", os.path.join(root, ".cache")),
     "AGENT_EVAL_DOCKER": "${pkgs.docker_29}/bin/docker",
@@ -279,7 +280,7 @@ environment.update({
 })
 os.execve(
     python,
-    [python, "-I", os.path.join(root, "scripts/run-agent-evaluation"), *sys.argv[1:]],
+    [python, "-I", "-B", os.path.join(root, "scripts/run-agent-evaluation"), *sys.argv[1:]],
     environment,
 )
 '';
