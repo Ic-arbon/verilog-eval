@@ -115,6 +115,7 @@ def _resolve_dependency(
 def _selected_packages(
     packages: dict[str, Any],
     agent: str,
+    source: Path,
 ) -> tuple[list[str], str]:
     if agent not in _AGENT_PACKAGES:
         raise ToolsProjectionError("Agent must be pi or opencode")
@@ -165,6 +166,8 @@ def _selected_packages(
                 if optional:
                     continue
                 raise
+            if optional and not (source / resolved).is_dir():
+                continue
             if resolved not in seen:
                 pending.append(resolved)
     return sorted(selected), binary_name
@@ -354,7 +357,7 @@ def project_agent_tools(
     _reject_prefix_state(source)
     lock, lock_bytes = _load_lock(source / "package-lock.json")
     packages = lock["packages"]
-    selected, expected_binary = _selected_packages(packages, agent)
+    selected, expected_binary = _selected_packages(packages, agent, source)
     selected_roots = tuple((source / package_path).resolve() for package_path in selected)
     for package_path, package_root in zip(selected, selected_roots):
         if not package_root.is_dir():

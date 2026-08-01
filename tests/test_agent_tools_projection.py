@@ -46,6 +46,7 @@ def make_tools(root: Path) -> Path:
                 "bin": {"opencode": "cli.js"},
             },
             "node_modules/shared": {"version": "2.0.0"},
+            "node_modules/optional-peer": {"version": "1.0.0", "optional": True},
             "node_modules/unrelated": {"version": "9.0.0", "dev": True},
         },
     }
