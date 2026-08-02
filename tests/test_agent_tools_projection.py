@@ -55,6 +55,24 @@ def make_tools(root: Path) -> Path:
     return tools
 
 
+def add_pi_tools(tools: Path) -> None:
+    package = tools / "node_modules" / "@earendil-works" / "pi-coding-agent"
+    package.mkdir(parents=True)
+    (package / "cli.js").write_text("console.log('pi')\n", encoding="utf-8")
+    (package / "package.json").write_text(
+        json.dumps({"name": "@earendil-works/pi-coding-agent", "version": "0.82.1"}),
+        encoding="utf-8",
+    )
+    lock_path = tools / "package-lock.json"
+    lock = json.loads(lock_path.read_text(encoding="utf-8"))
+    lock["packages"][""]["dependencies"]["@earendil-works/pi-coding-agent"] = "0.82.1"
+    lock["packages"]["node_modules/@earendil-works/pi-coding-agent"] = {
+        "version": "0.82.1",
+        "bin": {"pi": "cli.js"},
+    }
+    lock_path.write_text(json.dumps(lock), encoding="utf-8")
+
+
 class ToolsProjectionTests(unittest.TestCase):
     def test_selected_agent_and_transitive_packages_are_copied_only(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -94,6 +112,27 @@ class ToolsProjectionTests(unittest.TestCase):
             ).stat().st_ino
             self.assertNotEqual(source_inode, projected_inode)
             self.assertEqual(projection.path.stat().st_mode & 0o222, 0)
+
+    def test_focused_dcd_pi_entry_projects_the_pinned_pi_closure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = make_tools(root)
+            add_pi_tools(source)
+
+            projection = project_agent_tools(
+                source_prefix=source,
+                projection_root=root / "projections",
+                agent="pi-dcd-rtl-module",
+            )
+
+            self.assertTrue(
+                (projection.path / "node_modules/@earendil-works/pi-coding-agent/cli.js").is_file()
+            )
+            self.assertTrue((projection.path / "node_modules/.bin/pi").is_symlink())
+            self.assertEqual(
+                projection.versions,
+                {"@earendil-works/pi-coding-agent": "0.82.1"},
+            )
 
     def test_projection_reuse_requires_exact_digest(self):
         with tempfile.TemporaryDirectory() as tmp:

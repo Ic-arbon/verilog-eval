@@ -51,6 +51,15 @@ class RunnerCliStateTests(unittest.TestCase):
         self.assertEqual(options.jobs, 16)
         self.assertEqual(options.api_key_environment, "OPENAI_API_KEY")
 
+    def test_focused_dcd_pi_entry_is_an_explicit_material_agent(self):
+        options = parse_runner_options(
+            ["--with-agent=pi-dcd-rtl-module"],
+            environment={"VERILOG_EVAL_JOBS": "8"},
+        )
+
+        self.assertEqual(options.agent, "pi-dcd-rtl-module")
+        self.assertEqual(options.jobs, 8)
+
     def test_sampling_options_are_not_part_of_agent_interface(self):
         for option in ("--with-temperature=0.6", "--with-top-p=0.95"):
             with self.subTest(option=option), self.assertRaises(SystemExit):

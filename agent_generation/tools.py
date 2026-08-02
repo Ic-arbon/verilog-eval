@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 _AGENT_PACKAGES = {
     "pi": ("@earendil-works/pi-coding-agent", "pi"),
+    "pi-dcd-rtl-module": ("@earendil-works/pi-coding-agent", "pi"),
     "opencode": ("opencode-ai", "opencode"),
 }
 _BANNED_TOP_LEVEL = frozenset({".npmrc", ".npm", ".cache", "cache", "logs"})
@@ -118,7 +119,7 @@ def _selected_packages(
     source: Path,
 ) -> tuple[list[str], str]:
     if agent not in _AGENT_PACKAGES:
-        raise ToolsProjectionError("Agent must be pi or opencode")
+        raise ToolsProjectionError("Agent selection is unsupported")
     package_name, binary_name = _AGENT_PACKAGES[agent]
     root = packages.get("")
     if not isinstance(root, dict) or package_name not in root.get("dependencies", {}):

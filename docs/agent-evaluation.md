@@ -83,6 +83,31 @@ Change `--with-agent=pi` to run Pi. The default material values are:
 The Agent interface intentionally has no sampling controls. Thinking, context/output
 limits, host turn/tool budgets, and toolset are material run identity.
 
+### Focused DCD RTL-module producer
+
+`pi-dcd-rtl-module` is an explicit Pi producer rather than a prompt-selected mode. It
+requires a supplied sandbox image containing the fixed `/dcd-dispatch` executable and
+its DCD resources. The driver invokes that executable with `--entry rtl-module`; a base
+image without the dispatcher fails closed instead of silently running ordinary Pi.
+
+```bash
+VERILOG_EVAL_JOBS=8 nix run .#agent-eval -- \
+  --with-agent=pi-dcd-rtl-module \
+  --with-model=qwen3.6-coder \
+  --with-agent-max-input-tokens=32768 \
+  --with-max-tokens=32768 \
+  --with-agent-toolset=rtl \
+  --docker-image=verilog-eval-agent-sandbox:rtl-dcd-module \
+  --docker-archive=/absolute/path/to/rtl-dcd-module.tar \
+  --with-problems=/absolute/path/to/problems.txt \
+  --new-run --run-path-file=/absolute/path/to/run.path
+```
+
+The producer name, image content ID, prompt inputs, and limits are material identity.
+Each trajectory starts with `dcd_dispatch`, followed by the selected Pi process's normal
+JSON events; no parent model call occurs before dispatch. The sole submission remains
+`/workspace/TopModule.sv`.
+
 ## Formal run
 
 Create an explicit problem file or use the dataset default. A 156-sample run at concurrency

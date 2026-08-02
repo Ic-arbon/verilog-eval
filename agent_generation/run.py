@@ -176,7 +176,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Prepare and run one content-addressed Agent evaluation"
     )
     parser.add_argument(
-        "--with-agent", choices=("pi", "opencode"), dest="agent"
+        "--with-agent", choices=("pi", "pi-dcd-rtl-module", "opencode"), dest="agent"
     )
     parser.add_argument("--with-model", dest="model")
     parser.add_argument(

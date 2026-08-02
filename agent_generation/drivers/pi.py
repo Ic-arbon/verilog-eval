@@ -19,6 +19,7 @@ from agent_generation.drivers.base import INLINE_ARTIFACT_INSTRUCTION
 
 
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
+PI_DCD_DISPATCH_BINARY = "/dcd-dispatch"
 PI_PROVIDER = "openai-compatible"
 PI_CONFIG_DIR = "/workspace/.agent-config/pi"
 PI_MESSAGE_UPDATE_FIELDS = (
@@ -43,10 +44,13 @@ class PiDriver:
     base_url: str
     api_key_environment: str = "OPENAI_API_KEY"
     thinking_enabled: bool = True
+    entry: Optional[str] = None
 
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
+        if self.entry not in {None, "rtl-module"}:
+            raise ValueError(f"unsupported Pi entry: {self.entry}")
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
         config_dir = request.workspace / ".agent-config" / "pi"
@@ -100,7 +104,7 @@ class PiDriver:
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
         thinking_level = "high" if self.thinking_enabled else "off"
         inline_task = INLINE_ARTIFACT_INSTRUCTION + request.prompt_text
-        return (
+        pi_command = (
             PI_BINARY,
             "--mode",
             "json",
@@ -122,6 +126,15 @@ class PiDriver:
             "--tools",
             "read,write,edit,bash",
             inline_task,
+        )
+        if self.entry is None:
+            return pi_command
+        return (
+            PI_DCD_DISPATCH_BINARY,
+            "--entry",
+            self.entry,
+            "--",
+            *pi_command,
         )
 
     def environment(self, request: AgentRunRequest) -> AgentEnvironment:

@@ -11,7 +11,11 @@ from agent_generation.drivers.base import (
     INLINE_ARTIFACT_INSTRUCTION,
 )
 from agent_generation.drivers.opencode import OpenCodeDriver
-from agent_generation.drivers.pi import PI_ARTIFACT_SYSTEM_PROMPT, PiDriver
+from agent_generation.drivers.pi import (
+    PI_ARTIFACT_SYSTEM_PROMPT,
+    PI_DCD_DISPATCH_BINARY,
+    PiDriver,
+)
 
 
 SECRET = "do-not-persist-this-api-key"
@@ -101,6 +105,23 @@ class PiDriverTests(unittest.TestCase):
                 environment.variables,
             )
             self.assertEqual(environment.inherit, ("VLLM_API_KEY",))
+
+    def test_focused_dcd_entry_wraps_pi_with_a_fixed_dispatcher(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = make_request(Path(tmp))
+            driver = PiDriver(
+                base_url="http://127.0.0.1:58000/v1",
+                entry="rtl-module",
+            )
+
+            command = driver.build_command(request)
+
+            self.assertEqual(
+                command[:4],
+                (PI_DCD_DISPATCH_BINARY, "--entry", "rtl-module", "--"),
+            )
+            self.assertEqual(command[4], "/agent-tools/node_modules/.bin/pi")
+            self.assertEqual(command[-1].endswith(request.prompt_text), True)
 
     def test_pi_compacts_cumulative_updates_without_losing_incremental_content(self):
         driver = PiDriver(base_url="http://127.0.0.1:58000/v1")

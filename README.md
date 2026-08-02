@@ -112,8 +112,11 @@ nix run .#agent-eval -- \
 scripts/validate-agent-run --expected-samples=1 "$(cat "$run_path_file")"
 ```
 
-Change the Agent to `pi` as needed. The formal app never installs or downloads
-Agent tools. It projects only the selected lock-derived production closure into
+Change the Agent to `pi` as needed. The explicit `pi-dcd-rtl-module` producer is
+also available for a caller-selected focused RTL entry, but requires an explicit
+DCD sandbox image containing `/dcd-dispatch`; see the testing guide. The formal app
+never installs or downloads Agent tools. It projects only the selected lock-derived
+production closure into
 a read-only `/agent-tools` mount. Each sample gets a fresh non-root, read-only-root
 container containing only its public workspace; repository, dataset, hidden grader
 files, previous results, Docker socket, full run config, and unrelated environment

@@ -96,6 +96,14 @@ class CanonicalRunConfigTests(unittest.TestCase):
         )
         self.assertEqual(run_config_sha256(canonical), __import__("hashlib").sha256(canonical).hexdigest())
 
+    def test_focused_dcd_pi_entry_is_a_supported_material_identity(self):
+        config = valid_config()
+        config["agent"]["name"] = "pi-dcd-rtl-module"
+
+        canonical = canonical_run_config(config)
+
+        self.assertIn(b'"name":"pi-dcd-rtl-module"', canonical)
+
     def test_locator_changes_cannot_enter_material_identity(self):
         config = valid_config()
         for forbidden in (

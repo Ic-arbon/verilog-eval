@@ -106,8 +106,11 @@ def _driver(config: dict) -> AgentDriver:
         "api_key_environment": config["endpoint"]["api_key_environment"],
         "thinking_enabled": config["agent"]["thinking"],
     }
-    if config["agent"]["name"] == "pi":
+    agent = config["agent"]["name"]
+    if agent == "pi":
         return PiDriver(**common)
+    if agent == "pi-dcd-rtl-module":
+        return PiDriver(entry="rtl-module", **common)
     return OpenCodeDriver(**common)
 
 

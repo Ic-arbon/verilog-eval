@@ -21,7 +21,7 @@ _PACKAGE_NAME = re.compile(
     r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9][A-Za-z0-9_.-]{0,214}"
 )
 _NONCE = re.compile(r"[0-9a-f]{32}")
-_ALLOWED_AGENTS = frozenset({"pi", "opencode"})
+_ALLOWED_AGENTS = frozenset({"pi", "pi-dcd-rtl-module", "opencode"})
 _ALLOWED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
 _INPUT_KINDS = frozenset(
     {
