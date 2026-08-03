@@ -34,11 +34,9 @@ class RecordingRunner:
 
 
 class TimeoutRunner:
-    def __init__(self, *, stop_returncode=0):
+    def __init__(self):
         self.calls = []
-        self.stop_returncode = stop_returncode
-        self.stopped_before_return = False
-        self.force_removed_before_return = False
+        self.removed_before_return = False
 
     def __call__(self, command, **kwargs):
         self.calls.append((tuple(command), kwargs))
@@ -51,21 +49,7 @@ class TimeoutRunner:
                 output="partial trajectory\n",
                 stderr="deadline\n",
             )
-        if len(command) > 1 and command[1] == "stop":
-            self.stopped_before_return = True
-            return subprocess.CompletedProcess(
-                command,
-                self.stop_returncode,
-                stdout="",
-                stderr="stop failed" if self.stop_returncode else "",
-            )
-        if tuple(command[1:3]) == ("rm", "--force"):
-            self.force_removed_before_return = True
-            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
-        if tuple(command[1:3]) == ("container", "inspect"):
-            return subprocess.CompletedProcess(
-                command, 1, stdout="", stderr="not found"
-            )
+        self.removed_before_return = tuple(command[1:3]) == ("rm", "--force")
         return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
 
 
@@ -185,7 +169,7 @@ class DockerExecutorTests(unittest.TestCase):
 
             self.assertEqual(result.stdout, "compact event\ncomplete event\n")
 
-    def test_timeout_stops_container_gracefully_before_returning(self):
+    def test_timeout_force_removes_container_before_returning(self):
         with tempfile.TemporaryDirectory() as tmp:
             runner = TimeoutRunner()
             executor, spec, _tools = self.make_fixture(Path(tmp), runner=runner)
@@ -196,27 +180,8 @@ class DockerExecutorTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 124)
             self.assertEqual(result.stdout, "partial trajectory\n")
             self.assertEqual(result.stderr, "deadline\n")
-            self.assertTrue(runner.stopped_before_return)
-            self.assertFalse(runner.force_removed_before_return)
-            self.assertEqual(
-                runner.calls[1][0][1:5],
-                ("stop", "--time=3", "abcdef1234567890"),
-            )
-
-    def test_timeout_force_removes_container_when_graceful_stop_fails(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            runner = TimeoutRunner(stop_returncode=1)
-            executor, spec, _tools = self.make_fixture(Path(tmp), runner=runner)
-
-            result = executor.run(spec)
-
-            self.assertEqual(result.status, "timeout")
-            self.assertTrue(runner.stopped_before_return)
-            self.assertTrue(runner.force_removed_before_return)
-            self.assertEqual(
-                runner.calls[2][0][1:4],
-                ("rm", "--force", "abcdef1234567890"),
-            )
+            self.assertTrue(runner.removed_before_return)
+            self.assertEqual(runner.calls[1][0][1:4], ("rm", "--force", "abcdef1234567890"))
 
     def test_host_terminates_process_when_streamed_turn_budget_is_reached(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -228,7 +193,6 @@ class DockerExecutorTests(unittest.TestCase):
             fake_docker = root / "docker"
             fake_docker.write_text(
                 "#!/bin/sh\n"
-                "if [ \"$1\" = stop ]; then exit 0; fi\n"
                 "if [ \"$1\" = rm ]; then exit 0; fi\n"
                 "if [ \"$1\" = container ]; then echo 'not found' >&2; exit 1; fi\n"
                 "previous=\n"
@@ -280,9 +244,7 @@ class DockerExecutorTests(unittest.TestCase):
             fake_docker = root / "docker"
             fake_docker.write_text(
                 "#!/bin/sh\n"
-                "if [ \"$1\" = stop ]; then exit 0; fi\n"
                 "if [ \"$1\" = rm ]; then exit 0; fi\n"
-                "if [ \"$1\" = container ]; then echo 'not found' >&2; exit 1; fi\n"
                 "previous=\n"
                 "for argument in \"$@\"; do\n"
                 "  if [ \"$previous\" = --cidfile ]; then printf 'abcdef1234567890\\n' >\"$argument\"; fi\n"

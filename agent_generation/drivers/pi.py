@@ -94,10 +94,7 @@ class PiDriver:
                 "enabled": True,
                 "reserveTokens": request.per_call_max_tokens,
                 "keepRecentTokens": max(1, request.max_input_tokens // 2),
-            },
-            # The host owns the sample deadline. Pi's five-minute HTTP idle
-            # default can otherwise terminate a long reasoning stream early.
-            "httpIdleTimeoutMs": 0,
+            }
         }
         return (
             write_json(config_path, config),
