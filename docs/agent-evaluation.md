@@ -81,7 +81,10 @@ Change `--with-agent=pi` to run Pi. The default material values are:
 | Make jobs | `VERILOG_EVAL_JOBS`, default `4` |
 
 The Agent interface intentionally has no sampling controls. Thinking, context/output
-limits, host turn/tool budgets, and toolset are material run identity.
+limits, host turn/tool budgets, and toolset are material run identity. Pi's internal
+HTTP idle deadline is disabled so the host sample deadline remains authoritative;
+on host termination, the executor gives the container a bounded TERM window before
+forcing removal.
 
 ### Focused DCD RTL-module producer
 

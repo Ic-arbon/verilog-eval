@@ -76,6 +76,7 @@ class PiDriverTests(unittest.TestCase):
                     "keepRecentTokens": 8192,
                 },
             )
+            self.assertEqual(settings["httpIdleTimeoutMs"], 0)
             self.assertNotIn(SECRET, config_text)
 
             self.assertEqual(command[0], "/agent-tools/node_modules/.bin/pi")

@@ -224,6 +224,31 @@ class DockerExecutor:
         ):
             raise DockerInfrastructureError("container cleanup was not confirmed")
 
+    def _stop_and_remove(self, identifier: str) -> None:
+        """Give the Agent a bounded TERM window before forced cleanup."""
+
+        try:
+            completed = self.runner(
+                (self.docker_path, "stop", "--time=3", identifier),
+                capture_output=True,
+                text=True,
+                timeout=10,
+                env=self.host_environment,
+            )
+        except (OSError, subprocess.SubprocessError):
+            self._force_remove(identifier)
+            return
+        message = _decode_output(completed.stderr).lower()
+        if completed.returncode != 0 and not (
+            "no such" in message or "not found" in message
+        ):
+            self._force_remove(identifier)
+            return
+        try:
+            self._confirm_removed(identifier)
+        except DockerInfrastructureError:
+            self._force_remove(identifier)
+
     def _force_remove(self, identifier: str) -> None:
         try:
             completed = self.runner(
@@ -363,7 +388,7 @@ class DockerExecutor:
                 except BaseException as error:
                     identifier = self._container_identifier(cidfile)
                     try:
-                        self._force_remove(identifier)
+                        self._stop_and_remove(identifier)
                     finally:
                         self._stop_client_process(process)
                     raise DockerInfrastructureError(
@@ -375,7 +400,7 @@ class DockerExecutor:
                     except BaseException as error:
                         identifier = self._container_identifier(cidfile)
                         try:
-                            self._force_remove(identifier)
+                            self._stop_and_remove(identifier)
                         finally:
                             self._stop_client_process(process)
                         raise DockerInfrastructureError(
@@ -384,7 +409,7 @@ class DockerExecutor:
                     if event_kind is not None and event_kind not in BUDGET_EVENT_KINDS:
                         identifier = self._container_identifier(cidfile)
                         try:
-                            self._force_remove(identifier)
+                            self._stop_and_remove(identifier)
                         finally:
                             self._stop_client_process(process)
                         raise DockerInfrastructureError(
@@ -409,7 +434,7 @@ class DockerExecutor:
         if termination_reason is not None:
             identifier = self._container_identifier(cidfile)
             try:
-                self._force_remove(identifier)
+                self._stop_and_remove(identifier)
             finally:
                 self._stop_client_process(process)
         else:
@@ -482,7 +507,7 @@ class DockerExecutor:
             )
         except subprocess.TimeoutExpired as error:
             identifier = self._container_identifier(cidfile)
-            self._force_remove(identifier)
+            self._stop_and_remove(identifier)
             return ProcessResult(
                 status="timeout",
                 exit_code=124,
