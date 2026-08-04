@@ -342,3 +342,149 @@ I: /opt/agent/verilog-eval/runs/agent-eval-20260729T102105Z
 ```
 
 The run directory contains the canonical summary, all 156 generator sidecars, frozen Agent/Harness provenance, and per-sample trajectories. The exact evaluator and Harness commits recorded there are authoritative for reproducing I.
+
+## 2026-08-03 full four-arm rerun
+
+### Scope and frozen configuration
+
+This experiment reran all 156 `spec-to-rtl` problems once in each of four arms. The arm invocations were strictly serial in this order:
+
+```text
+bare model → OpenCode clean → Pi clean → Pi extensions
+```
+
+All arms used the same prompt bytes, the same served `qwen3.6-coder` model from `/opt/llm/Qwen3.6-27B`, eight concurrent samples, and unchanged host-side Icarus grading. The endpoint process remained PID `2348609` throughout the series. Shared endpoint use was permitted and observed, so wall-time and timeout comparisons are descriptive rather than controlled latency measurements.
+
+The bare-model arm used zero examples, no tools, the model generator's Pass@1 defaults, and a 32,768-token output limit. Each Agent arm used:
+
+```text
+max input tokens  = 32,768
+max output tokens = 32,768
+timeout            = 500s
+max turns          = 20
+max tool calls     = 50
+thinking           = enabled
+toolset            = rtl
+```
+
+`Pi extensions` means the deterministic DCD focused route
+`rtl-module → rtl-module-orchestrator`, implemented by producer
+`pi-dcd-rtl-module`. It does not include dedicated semantic `eda_lint` or
+`eda_simulate` tools. Every one of its 156 trajectories began with the expected
+`dcd_dispatch` event. `OpenCode clean` and `Pi clean` did not load the DCD route.
+
+The model-only and Agent arms use different generator implementations by design. Their benchmark inputs and correctness authority are identical, but their generation mechanics and resource accounting are not interchangeable.
+
+### Post-run validity correction
+
+The frozen Agent evaluator in this series contained a candidate-content credential scanner at the Sample Bundle publication seam. It rejected a candidate whenever the credential byte string appeared anywhere in `TopModule.sv`. This violated the producer/evaluator seam: candidate-content safety belongs to the Agent, while the evaluator must publish every structurally admissible candidate byte-for-byte.
+
+The scanner materially affected all three Agent arms:
+
+| Arm | Scanner-rejected candidates | Successful `TopModule.sv` writes observed | Normal HDL declaration collision observed |
+| --- | ---: | ---: | ---: |
+| OpenCode clean | 13 | 13 | 13 |
+| Pi clean | 10 | 10 | 10 |
+| Pi extensions | 18 | 18 | 18 |
+
+Those candidates were discarded and replaced with frozen invalid Verilog before hidden grading. Artifact-only policy prohibits reconstructing candidates from trajectory text, so their true correctness is unknowable. The raw scores below remain reproducible evidence of what the frozen evaluator reported, but they are **not admissible evidence for ranking bare model versus Agent capability**. A rerun after removing content-based candidate rejection is required. Diagnostic trajectory/stderr redaction remains separate and cannot alter candidate bytes or submission status.
+
+### Results
+
+| Arm | Pass@1 | Published artifacts | Agent timeouts | Known total tokens | Turns | Tool calls | Wall time |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Bare model | **109/156 = 69.87%** | N/A | N/A | 788,296 | N/A | 0 | 3,785s |
+| OpenCode clean | 101/156 = 64.74% | 140/156 | 4 | 3,194,150 | 625 | 511 | 2,293s |
+| Pi clean | 99/156 = 63.46% | 139/156 | 9 | 1,954,232 | 534 | 387 | 2,252s |
+| Pi extensions | 108/156 = 69.23% | 133/156 | 12 | 3,740,169 | 865 | 770 | 2,495s |
+
+The Agent token totals are lower bounds where timed-out samples did not report usage: OpenCode has two unknown samples, Pi clean seven, and Pi extensions five. Bare-model usage is known for all 156 samples.
+
+Agent submission outcomes were:
+
+| Arm | Published | Invalid | Missing | Passes among published |
+| --- | ---: | ---: | ---: | ---: |
+| OpenCode clean | 140 | 13 | 3 | 101/140 = 72.14% |
+| Pi clean | 139 | 10 | 7 | 99/139 = 71.22% |
+| Pi extensions | 133 | 18 | 5 | **108/133 = 81.20%** |
+
+Execution status, artifact publication, and hidden correctness are separate dimensions. In particular, the extension arm published fewer artifacts than either clean Agent arm but had the highest conditional correctness among its published artifacts.
+
+### Paired outcomes
+
+Exact two-sided McNemar tests compare the four arms problem by problem:
+
+| A | B | A only | B only | Both pass | Neither passes | Exact p |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Bare model | OpenCode clean | 24 | 16 | 85 | 31 | 0.2682 |
+| Bare model | Pi clean | 26 | 16 | 83 | 31 | 0.1641 |
+| Bare model | Pi extensions | 18 | 17 | 91 | 30 | 1.0000 |
+| OpenCode clean | Pi clean | 11 | 9 | 90 | 46 | 0.8238 |
+| OpenCode clean | Pi extensions | 10 | 17 | 91 | 38 | 0.2478 |
+| Pi clean | Pi extensions | 11 | 20 | 88 | 37 | 0.1496 |
+
+Pi extensions therefore gained 20 problems and lost 11 relative to Pi clean, for a net gain of nine passes. The paired result does not cross the conventional 0.05 threshold. Bare model and Pi extensions were effectively tied: their scores differ by one, with 18 bare-only and 17 extension-only successes.
+
+### Tool and EDA audit
+
+| Arm | Tool breakdown | Samples with command-line EDA | Samples with functional simulation | EDA/edit/recheck loops |
+| --- | --- | ---: | ---: | ---: |
+| Bare model | none | 0/156 | 0 | 0 |
+| OpenCode clean | `write` 156, `read` 344, `glob` 9, `bash` 2 | 0/156 | 0 | 0 |
+| Pi clean | `write` 158, `read` 144, `bash` 79, `edit` 6 | 10/156 | 5 | 5 |
+| Pi extensions | `write` 159, `read` 165, `bash` 431, `edit` 15 | **151/156** | **19** | **20** |
+
+The 20 extension-arm EDA/edit/recheck samples produced 17 final hidden-test passes. This is descriptive, not causal: tool use was selected by the Agent, and the clean and extension arms generated different initial RTL. A same-initial-artifact EDA-on/EDA-off experiment is required to isolate the effect of EDA feedback.
+
+No arm invoked a dedicated semantic EDA tool. The extension arm used generic `bash` to invoke command-line Icarus and Verilator. Its audit found 151 availability probes, 197 Icarus compile command matches, 24 Verilator lint command matches, and 36 `vvp` simulation command matches. A single shell command may contribute to more than one category, so these counts are not distinct tool calls.
+
+### Conclusions
+
+- The observed scores were bare model 109/156, Pi extensions 108/156, OpenCode clean 101/156, and Pi clean 99/156. They describe the frozen evaluator output, not an admissible capability ranking, because only the Agent arms suffered content-based candidate rejection.
+- The scanner rejected 13 OpenCode, 10 Pi-clean, and 18 Pi-extension candidates after successful artifact writes. Their unknown correctness prevents correction of the scores after the fact.
+- The observed Pi-extension versus Pi-clean difference was nine passes, but scanner exposure differed between the arms and the paired result cannot isolate extension efficacy.
+- Relative to Pi clean, Pi extensions used approximately 1.91× the known tokens, 1.99× the tool calls, and 1.62× the turns, while recording 12 rather than 9 Agent timeouts. These resource observations remain descriptive.
+- Command-line EDA was a normal part of the focused extension behavior, but systematic functional simulation remained uncommon and this experiment does not establish that EDA caused any score difference.
+- Each arm also has only one stochastic sample per problem. Even after the evaluator seam is corrected, a stable Harness ordering requires repeated interleaved runs.
+- The exact bare-model result remains valid for this specific 32K-output, eight-job profile, but comparisons against the affected Agent arms must be rerun.
+- Because this run used model root `/opt/llm/Qwen3.6-27B`, its scores should not be pooled directly with runs made against a different model artifact merely because the served model name is the same.
+
+### Provenance
+
+```text
+Experiment root:
+/opt/agent/verilogeval-full4-20260803
+
+Bare model:
+/opt/agent/verilog-eval/build/nix-eval-1ced7ae6eccf
+
+OpenCode clean:
+/opt/agent/verilog-eval-formal/build/a269cf6450c12a06bf7ede97adcb33409e355f15e5673c8008d67446e2cc28e8
+
+Pi clean:
+/opt/agent/verilog-eval-formal/build/1a3df8c3ae42a0d6a42459b52dcec8366ed0a801e428749170464d4ad5b142ab
+
+Pi extensions:
+/opt/agent/verilog-eval-formal/build/ef9d06b1721f153d06b7744f998402dd1c57267a2951f0203e8e3093404a04ca
+```
+
+Source identities:
+
+```text
+model-only evaluator: ec4b33025e43be888309f8260f032c4ce8e77f45
+Agent evaluator:      8133061876aaf958b019241f601ff5901ada6dc0
+DCD integration:      608869856aa0aa431e134aae09b7529c74dc8ff7
+```
+
+Frozen evidence and reports:
+
+```text
+freeze.json       2b4bea41bc7911f2e9e54906ebf347ca2b183d9072a0e0a6321f6e39dd96056c
+run-series.sh     77eecdecf0655b2fb2aed9fd6e87dfdb38696cf8647516de48e15d8253224bc7
+problems.txt      301e28ce3c9653a664b4fda2358202eafdaf0f1f8104e08f7a48085a80e6cf06
+comparison.json   1d6c6d77ee9d0ce80d80b18843ff770272b561ba1d60196f2fb2e786bbfd2b31
+comparison.txt    10534014411705bb68a7399f52c20b0260e86227bf56dd3f03ac0aec1cd29769
+tool-usage.json   0d0ec1d38febed73c3effc7fdcf0d056b6bd459e4951e33b498a6546dfee118b
+```
+
+All three Agent run roots passed `scripts/validate-agent-run --expected-samples=156`. The series ended with the endpoint identity unchanged, no evaluation containers, no benchmark tmux session, and no temporary sample workspaces.

@@ -265,7 +265,7 @@ def generate_agent_sample(
                 "endpoint_base_url": config["endpoint"]["base_url"],
                 "endpoint_evidence_sha256": evidence["response_sha256"],
             },
-            secret_values=(credential,),
+            diagnostic_redaction_values=(credential,),
             starter_sha256=starter_sha256,
         )
     return manifest

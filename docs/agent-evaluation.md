@@ -165,8 +165,13 @@ when compilation failed; that is ordinary correctness evidence, not infrastructu
 `agent-summary.json` reports three separate axes:
 
 - execution outcome from the Agent process;
-- submission state from host-side `/workspace/TopModule.sv` inspection;
+- submission state from structural host-side `/workspace/TopModule.sv` inspection;
 - correctness from the original Icarus grader.
+
+Submission inspection is limited to path, file type, nonempty bounded size, and unchanged
+public-starter detection. Candidate content belongs to the Agent and is published
+byte-for-byte; it is never scanned for credentials or other policy. Diagnostic redaction
+is a separate persistence operation and cannot affect submission status.
 
 Unknown token/turn/tool usage remains `null` with `usage_source=unavailable`; aggregate
 reports retain known sums and unknown-sample counts rather than inventing zeros.

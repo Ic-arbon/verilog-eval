@@ -77,8 +77,9 @@ def _inspect_candidate(
     workspace: Path,
     *,
     starter_sha256: Optional[str],
-    secret_values: Iterable[str],
 ) -> tuple[str, bytes, Optional[str], Optional[int]]:
+    """Classify only file structure; candidate content is opaque."""
+
     candidate_path = Path(workspace) / FORMAL_SUBMISSION_NAME
     try:
         metadata = candidate_path.lstat()
@@ -94,18 +95,15 @@ def _inspect_candidate(
     digest = _sha256(content)
     if starter_sha256 is not None and digest == starter_sha256:
         return "missing", INVALID_CANDIDATE_BYTES, None, None
-    for secret in secret_values:
-        if secret and secret.encode("utf-8") in content:
-            return "invalid", INVALID_CANDIDATE_BYTES, None, None
     return "published", content, digest, len(content)
 
 
-def _scrub(value: str, secrets: Iterable[str]) -> bytes:
-    scrubbed = value
-    for secret in secrets:
-        if secret:
-            scrubbed = scrubbed.replace(secret, "[REDACTED]")
-    return scrubbed.encode("utf-8")
+def _redact_diagnostic(value: str, redaction_values: Iterable[str]) -> bytes:
+    redacted = value
+    for redaction_value in redaction_values:
+        if redaction_value:
+            redacted = redacted.replace(redaction_value, "[REDACTED]")
+    return redacted.encode("utf-8")
 
 
 def _artifact(content: bytes) -> dict[str, object]:
@@ -343,11 +341,11 @@ def commit_sample_bundle(
     process: ProcessResult,
     limits: Mapping[str, int],
     runtime: Mapping[str, str],
-    secret_values: Iterable[str] = (),
+    diagnostic_redaction_values: Iterable[str] = (),
     starter_sha256: Optional[str] = None,
     fault: FaultHook = None,
 ) -> dict:
-    """Inspect `/workspace/TopModule.sv` and commit sidecars then candidate."""
+    """Commit diagnostics, then publish structural candidate bytes unchanged."""
 
     output = Path(output_path)
     if output.stem != sample_id:
@@ -386,14 +384,13 @@ def commit_sample_bundle(
         if existing is not None:
             return existing
 
-        secrets = tuple(secret_values)
+        redaction_values = tuple(diagnostic_redaction_values)
         status, candidate, source_sha, source_size = _inspect_candidate(
             Path(workspace),
             starter_sha256=starter_sha256,
-            secret_values=secrets,
         )
-        trajectory = _scrub(process.stdout, secrets)
-        stderr = _scrub(process.stderr, secrets)
+        trajectory = _redact_diagnostic(process.stdout, redaction_values)
+        stderr = _redact_diagnostic(process.stderr, redaction_values)
         manifest = _manifest(
             sample_id=sample_id,
             agent=agent,

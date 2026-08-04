@@ -64,7 +64,7 @@ class SampleResultTransactionTests(unittest.TestCase):
         fixture = Path(__file__).parent / "fixtures/invalid-agent-submission.sv"
         self.assertEqual(fixture.read_bytes(), INVALID_CANDIDATE_BYTES)
 
-    def commit(self, root: Path, *, process=None, secrets=(), fault=None):
+    def commit(self, root: Path, *, process=None, redaction_values=(), fault=None):
         workspace = root / "workspace"
         workspace.mkdir(exist_ok=True)
         output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
@@ -78,7 +78,7 @@ class SampleResultTransactionTests(unittest.TestCase):
             process=process or completed(),
             limits=limits(),
             runtime=runtime(),
-            secret_values=secrets,
+            diagnostic_redaction_values=redaction_values,
             fault=fault,
         )
 
@@ -110,36 +110,56 @@ class SampleResultTransactionTests(unittest.TestCase):
             self.assertLess(events.index("sidecars_synced"), events.index("candidate_renamed"))
             self.assertEqual(validate_sample_bundle(output, DIGEST), manifest)
 
-    def test_missing_chat_only_or_secret_candidate_uses_frozen_invalid_verilog(self):
-        secret = "sample-secret-canary"
-        cases = ("missing", "chat", "secret")
-        for case in cases:
-            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
-                workspace = root / "workspace"
-                workspace.mkdir()
-                process = completed(stdout="module TopModule; endmodule\n")
-                secrets = ()
-                if case == "secret":
-                    (workspace / "TopModule.sv").write_text(
-                        f"module TopModule; // {secret}\nendmodule\n"
-                    )
-                    secrets = (secret,)
-                manifest = self.commit(root, process=process, secrets=secrets)
-                output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
+    def test_chat_only_candidate_uses_frozen_invalid_verilog(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            process = completed(stdout="module TopModule; endmodule\n")
 
-                self.assertEqual(output.read_bytes(), INVALID_CANDIDATE_BYTES)
-                expected = "invalid" if case == "secret" else "missing"
-                self.assertEqual(manifest["submission"]["status"], expected)
-                self.assertIsNone(manifest["submission"]["source_sha256"])
-                self.assertNotIn(secret, output.read_text())
+            manifest = self.commit(root, process=process)
+            output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
+
+            self.assertEqual(output.read_bytes(), INVALID_CANDIDATE_BYTES)
+            self.assertEqual(manifest["submission"]["status"], "missing")
+            self.assertIsNone(manifest["submission"]["source_sha256"])
+
+    def test_candidate_content_is_opaque_to_diagnostic_redaction(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            redaction_value = "local"
+            candidate = (
+                b"module TopModule(output logic zero); "
+                b"localparam ZERO = 1'b0; assign zero = ZERO; endmodule\n"
+            )
+            (workspace / "TopModule.sv").write_bytes(candidate)
+            process = completed(stdout=redaction_value, stderr=redaction_value)
+
+            manifest = self.commit(
+                root,
+                process=process,
+                redaction_values=(redaction_value,),
+            )
+            output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
+            paths = sample_sidecar_paths(output)
+
+            self.assertEqual(output.read_bytes(), candidate)
+            self.assertEqual(manifest["submission"]["status"], "published")
+            self.assertNotIn(redaction_value, paths["trajectory"].read_text())
+            self.assertNotIn(redaction_value, paths["stderr"].read_text())
 
     def test_secret_is_redacted_from_trajectory_and_stderr(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             secret = "transport-secret-canary"
             process = completed(stdout=f'{{"text":"{secret}"}}\n', stderr=secret)
-            manifest = self.commit(root, process=process, secrets=(secret,))
+            manifest = self.commit(
+                root,
+                process=process,
+                redaction_values=(secret,),
+            )
             output = root / "build/Prob001_zero/Prob001_zero_sample01.sv"
             paths = sample_sidecar_paths(output)
 

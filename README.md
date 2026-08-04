@@ -129,10 +129,12 @@ both are removed before report publication. Agent defaults are one sample,
 50 completed tool calls, thinking on, the standard toolset, and four Make jobs.
 Agent evaluation has no sampling controls.
 
-Each Sample Bundle commits scrubbed trajectory, stderr, canonical manifest, and
-candidate last. The final Python report joins these hash-valid bundles with canonical
-Icarus rows and commits text first and JSON last. Execution, submission, correctness,
-and nullable usage remain separate.
+Each Sample Bundle commits scrubbed diagnostic sidecars, a canonical manifest, and the
+candidate last. Any bounded, nonempty regular `/workspace/TopModule.sv` is published
+byte-for-byte: candidate safety belongs to the Agent, and the evaluator applies no content
+scanner or content-based submission policy. The final Python report joins these hash-valid
+bundles with canonical Icarus rows and commits text first and JSON last. Execution,
+submission, correctness, and nullable usage remain separate.
 
 Run the adversarial Linux gates before a larger evaluation:
 

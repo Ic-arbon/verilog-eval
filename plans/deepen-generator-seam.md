@@ -158,7 +158,7 @@ The runner uses the credential for preflight, removes it from all child environm
 
 The broker runs only while the exclusive run lock is held, validates peer UID plus expected config digest/sample ID/environment name, supports configured concurrency, persists/logs nothing, and unlinks on every exit. `sv-agent-generate` retrieves the key into only its process environment and passes it to Docker by name. The socket/config is not mounted. Linux `/proc` and recording tests prove configure, Make, recipes, grader, analysis, argv, and persisted artifacts never receive the value. Long-root tests run on macOS and Linux.
 
-A secret-bearing candidate is invalid; exact values are redacted from trajectory/stderr before persistence. The selected Agent remains trusted to use its credential for the configured endpoint.
+The selected Agent owns credential handling and candidate-content safety after retrieval. Candidate admission is structural only: the evaluator never scans candidate bytes or changes submission status based on their content. Exact credential values are still redacted from diagnostic trajectory/stderr persistence, which is a separate operation and cannot alter the candidate.
 
 ## OpenAI-compatible preflight
 
@@ -190,7 +190,7 @@ Malformed usage is a contract error if structurally claimed; absent telemetry is
 
 ## Sample-result transaction
 
-Prepared artifacts are secret-scrubbed normalized trajectory, scrubbed stderr, canonical manifest, and canonical candidate. The manifest hashes/sizes exactly candidate, trajectory, and stderr; it never hashes itself. Manifest integrity is established by canonical-byte parsing plus config/sample structural validation, avoiding circular identity. Sidecars use no-follow directory-fd temp creation, file sync, rename, and directory sync. Candidate rename is the linearization point after durable sidecars; then its directory is synced. Catchable post-rename failures unlink/sync candidate. If cleanup fails, the run is corrupt and quarantinable.
+Prepared artifacts are credential-redacted diagnostic trajectory/stderr, canonical manifest, and a byte-preserved candidate. The manifest hashes/sizes exactly candidate, trajectory, and stderr; it never hashes itself. Manifest integrity is established by canonical-byte parsing plus config/sample structural validation, avoiding circular identity. Sidecars use no-follow directory-fd temp creation, file sync, rename, and directory sync. Candidate rename is the linearization point after durable sidecars; then its directory is synced. Catchable post-rename failures unlink/sync candidate. If cleanup fails, the run is corrupt and quarantinable. Diagnostic redaction and candidate admission are disjoint: no candidate byte is inspected as security policy.
 
 Process death between rename/sync is recovered by validation, never existence. Recovery is deterministic:
 
@@ -205,7 +205,7 @@ Process death between rename/sync is recovered by validation, never existence. R
 
 Parallel Make targets have disjoint sample paths; a target-local no-follow lock rejects duplicate direct invocation. Child-death tests cover every hook and every table state.
 
-Missing, unchanged, symlink, empty, nonregular, oversized, or secret-bearing workspace submission produces frozen invalid Verilog and its orthogonal status. Pinned-Icarus tests prove failure for both tasks.
+Missing, unchanged starter, symlink, empty, nonregular, or oversized workspace submission produces frozen invalid Verilog and its orthogonal status. Every other bounded regular candidate is published byte-for-byte regardless of content. Pinned-Icarus tests prove placeholder failure for both tasks, and transaction tests prove diagnostic redaction cannot reject or modify a candidate.
 
 ## Exact workspace/container projection
 
@@ -462,7 +462,7 @@ tests/fixtures/invalid-agent-submission.sv
 
 1. Freeze placeholder and prove failure for both task contexts using pinned Nix Icarus.
 2. Implement candidate inspection and closed failure taxonomy values without live wiring.
-3. Implement secret scrub/reject, use the Step-1 exact manifest predicate, hash only candidate/trajectory/stderr (never manifest itself), and implement durable candidate-last transaction.
+3. Implement diagnostic credential redaction, structural-only candidate admission, the Step-1 exact manifest predicate, candidate/trajectory/stderr hashing (never manifest itself), and the durable candidate-last transaction.
 4. Use I/O fault and child-process-death hooks at every temp/write/rename/sync; recovery validates or quarantines.
 5. Implement text-first/JSON-last report transaction with summary/text hashes and death recovery.
 6. Keep unknown usage null and statuses orthogonal in all fixtures.
@@ -796,6 +796,7 @@ Reject: second scheduler; duplicate mutable config; semantic env config; key in 
 
 ## Mutation Log
 
-No scope mutation. Pre-implementation review replaced rejected shell-text args with NUL argv, added private credential handoff, complete environment/tool projection, closed failure taxonomy, and recoverable sample/report transactions.
+Pre-implementation review replaced rejected shell-text args with NUL argv, added private credential handoff, complete environment/tool projection, closed failure taxonomy, and recoverable sample/report transactions.
 
 - Step 1 started after explicit user approval. The accepted public TDD seams are Run Configuration, Runtime Binding, result predicate, runner CLI, generator invoker, sample/report transactions, and the generated configure→Make path.
+- 2026-08-03: explicit operator direction corrected the Sample Bundle seam. Candidate-content security belongs to the Agent; the evaluator admits only by file structure and publishes candidate bytes unchanged. The prior exact-credential candidate scan was removed after it rejected normal HDL. Diagnostic sidecar redaction remains disjoint from submission admission.

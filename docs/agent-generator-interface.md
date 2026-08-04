@@ -130,7 +130,9 @@ The credential value enters preparation through the configured environment name 
 a private run-local Unix broker. The broker validates peer UID, config digest, sample ID,
 and environment name. Configure, Make, grading, argv, reports, and persisted runtime
 bindings never receive the value. The broker shuts down and its socket is durably removed
-before report publication.
+before report publication. The Agent owns credential handling after retrieval and owns the
+safety of candidate content; the evaluator does not enforce content-security policy on the
+candidate.
 
 ## Container boundary
 
@@ -160,10 +162,13 @@ For `<sample>.sv`, the host commits:
 ```
 
 The manifest hashes and sizes only candidate, trajectory, and stderr; it never hashes
-itself. Every artifact is scrubbed and synced before the candidate is linked into place.
-A missing, invalid, unchanged starter, or secret-containing candidate becomes the frozen
-invalid Verilog placeholder. It still reaches the unchanged grader. Filesystem,
-container-control, transaction, or identity failures publish no accepted bundle.
+itself. Diagnostic sidecars are redacted and synced before the candidate is linked into
+place. Candidate admission is structural only: a bounded, nonempty regular
+`/workspace/TopModule.sv` is published byte-for-byte without content scanning. A missing
+or structurally invalid file, or an unchanged public starter, becomes the frozen invalid
+Verilog placeholder and still reaches the unchanged grader. Diagnostic redaction cannot
+change candidate bytes or submission status. Filesystem, container-control, transaction,
+or identity failures publish no accepted bundle.
 
 A valid existing candidate requires all sidecars, canonical manifest bytes, exact hashes,
 and the same run-config digest. Regular partial sidecars without a candidate are removed
