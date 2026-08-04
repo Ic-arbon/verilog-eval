@@ -95,6 +95,7 @@ _FORMAL_ENVIRONMENT_NAMES = frozenset(
         "VERILOG_EVAL_CACHE_ROOT",
         "VERILOG_EVAL_JOBS",
         "AGENT_EVAL_AGENT_TOOLS",
+        "AGENT_EVAL_DCD_PI_BUNDLE",
         "AGENT_EVAL_DOCKER",
         "AGENT_EVAL_DOCKER_IMAGE_STANDARD",
         "AGENT_EVAL_DOCKER_ARCHIVE_STANDARD",
@@ -133,6 +134,7 @@ class RunnerOptions:
     problems_file: Optional[Path]
     build_root: Optional[Path]
     agent_tools: Optional[Path]
+    dcd_pi_bundle: Optional[Path]
     docker_path: Optional[Path]
     docker_image: Optional[str]
     docker_archive: Optional[Path]
@@ -176,7 +178,7 @@ def _parser() -> argparse.ArgumentParser:
         description="Prepare and run one content-addressed Agent evaluation"
     )
     parser.add_argument(
-        "--with-agent", choices=("pi", "pi-dcd-rtl-module", "opencode"), dest="agent"
+        "--with-agent", choices=("pi", "pi-dcd-front-end", "opencode"), dest="agent"
     )
     parser.add_argument("--with-model", dest="model")
     parser.add_argument(
@@ -216,6 +218,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--with-problems", dest="problems_file", type=Path)
     parser.add_argument("--build-root", type=Path)
     parser.add_argument("--agent-tools", type=Path)
+    parser.add_argument("--dcd-pi-bundle", type=Path)
     parser.add_argument("--docker-path", type=Path)
     parser.add_argument("--docker-image")
     parser.add_argument("--docker-archive", type=Path)
@@ -401,6 +404,10 @@ def parse_runner_options(
         ),
         build_root=build_root,
         agent_tools=locator(namespace.agent_tools, "AGENT_EVAL_AGENT_TOOLS"),
+        dcd_pi_bundle=locator(
+            namespace.dcd_pi_bundle,
+            "AGENT_EVAL_DCD_PI_BUNDLE",
+        ),
         docker_path=locator(namespace.docker_path, "AGENT_EVAL_DOCKER"),
         docker_image=(
             namespace.docker_image
@@ -812,6 +819,17 @@ def collect_preparation_evidence(
         raise RunnerError(f"cannot identify host toolchain: {error}") from error
 
     support_paths: dict[str, Path] = {}
+    if options.agent == "pi-dcd-front-end":
+        if options.dcd_pi_bundle is None:
+            raise RunnerError("pi-dcd-front-end requires an explicit DCD Pi bundle")
+        try:
+            support_paths["dcd-pi-bundle"] = options.dcd_pi_bundle.resolve(
+                strict=True
+            )
+        except OSError as error:
+            raise RunnerError("DCD Pi bundle is unavailable") from error
+    elif options.dcd_pi_bundle is not None:
+        raise RunnerError("DCD Pi bundle is only valid for pi-dcd-front-end")
     if environ.get("SSL_CERT_FILE"):
         support_paths["ca-bundle"] = Path(environ["SSL_CERT_FILE"]).resolve(strict=True)
     for support_name, support_path in (

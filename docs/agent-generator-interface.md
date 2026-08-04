@@ -78,9 +78,11 @@ nix run .#agent-eval -- \
   --run-path-file=/tmp/verilog-agent-run
 ```
 
-`--with-agent=opencode` selects OpenCode. `--with-agent-toolset=rtl` selects the larger
-RTL image. Agent evaluation exposes neither `temperature` nor `top_p`; those remain only
-part of the unchanged model-producer interface.
+`--with-agent=opencode` selects OpenCode. `--with-agent=pi-dcd-front-end` selects the
+complete DCD front-end capability and additionally requires `--dcd-pi-bundle=<path>` (or
+`AGENT_EVAL_DCD_PI_BUNDLE`). `--with-agent-toolset=rtl` selects the larger RTL image.
+Agent evaluation exposes neither `temperature` nor `top_p`; those remain only part of the
+unchanged model-producer interface.
 
 The run path is acknowledged on stdout and, when supplied, durably written to the
 mode-0600 `--run-path-file`. Do not infer it from build-directory naming.
@@ -96,12 +98,13 @@ mode-0600 `--run-path-file`. Do not infer it from build-directory naming.
 - endpoint base URL, exact bounded `/models` response digest, and credential
   environment-variable name, never the value;
 - source commit, Docker image/daemon identity, projected tools identities and package
-  versions, host toolchain/support identities, and Make concurrency;
+  versions, host toolchain/support identities—including DCD bundle bytes when selected—and
+  Make concurrency;
 - an optional nonce only for `--new-run`.
 
 Machine-local locators are not material identity. They live temporarily in the owned
 mode-0600 `runtime-bindings.json`, including separate tools-source and projected-tools
-locators. Their executable, support-file, image/daemon, source/input, lock, source-tree,
+locators and, for DCD, the frozen Pi bundle locator. Their executable, support-file, image/daemon, source/input, lock, source-tree,
 and projected-tree identities are rechecked against the immutable config before configure.
 The bindings are removed and synced after success or failure. The file never enters a container or report.
 

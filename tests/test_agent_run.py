@@ -32,7 +32,8 @@ from agent_generation.provenance import (
 from agent_generation.run_config import publish_run_config
 from tests.test_agent_endpoint import ThreadedServer, json_handler
 from tests.test_agent_run_config import valid_config
-from tests.test_agent_tools_projection import make_tools
+from tests.test_agent_tools_projection import add_pi_tools, make_tools
+from tests.test_dcd_pi_bundle import make_bundle
 
 
 class RunnerCliStateTests(unittest.TestCase):
@@ -51,14 +52,24 @@ class RunnerCliStateTests(unittest.TestCase):
         self.assertEqual(options.jobs, 16)
         self.assertEqual(options.api_key_environment, "OPENAI_API_KEY")
 
-    def test_focused_dcd_pi_entry_is_an_explicit_material_agent(self):
+    def test_dcd_front_end_pi_entry_is_an_explicit_material_agent(self):
         options = parse_runner_options(
-            ["--with-agent=pi-dcd-rtl-module"],
+            [
+                "--with-agent=pi-dcd-front-end",
+                "--dcd-pi-bundle=/opt/agent/dcd-pi.tar",
+            ],
             environment={"VERILOG_EVAL_JOBS": "8"},
         )
 
-        self.assertEqual(options.agent, "pi-dcd-rtl-module")
+        self.assertEqual(options.agent, "pi-dcd-front-end")
+        self.assertEqual(options.dcd_pi_bundle, Path("/opt/agent/dcd-pi.tar"))
         self.assertEqual(options.jobs, 8)
+
+        with self.assertRaises(SystemExit):
+            parse_runner_options(
+                ["--with-agent=pi-dcd-rtl-module"],
+                environment={"VERILOG_EVAL_JOBS": "8"},
+            )
 
     def test_sampling_options_are_not_part_of_agent_interface(self):
         for option in ("--with-temperature=0.6", "--with-top-p=0.95"):
@@ -222,6 +233,9 @@ class SourceAndInputIdentityTests(unittest.TestCase):
             subprocess.run(("git", "-C", str(source), "commit", "-qm", "dataset"), check=True)
 
             tools = make_tools(root)
+            add_pi_tools(tools)
+            dcd_bundle = root / "dcd-pi.tar"
+            make_bundle(dcd_bundle)
             bin_dir = root / "bin"
             bin_dir.mkdir()
             calls = root / "calls.log"
@@ -250,7 +264,9 @@ class SourceAndInputIdentityTests(unittest.TestCase):
             with ThreadedServer(handler) as base:
                 options = parse_runner_options(
                     [
-                        "--with-agent=opencode",
+                        "--with-agent=pi-dcd-front-end",
+                        "--with-agent-toolset=rtl",
+                        f"--dcd-pi-bundle={dcd_bundle}",
                         f"--with-openai-api-base={base}",
                         f"--source-root={source}",
                         f"--with-dataset={dataset}",
@@ -258,7 +274,7 @@ class SourceAndInputIdentityTests(unittest.TestCase):
                         f"--build-root={root / 'runs'}",
                         f"--agent-tools={tools}",
                         f"--docker-path={docker}",
-                        "--docker-image=verilog-eval-agent-sandbox:standard",
+                        "--docker-image=verilog-eval-agent-sandbox:rtl",
                         f"--docker-archive={image_archive}",
                     ],
                     environment={"VERILOG_EVAL_JOBS": "4"},
@@ -279,6 +295,17 @@ class SourceAndInputIdentityTests(unittest.TestCase):
             self.assertRegex(evidence.docker_daemon_identity, r"^sha256:[0-9a-f]{64}$")
             self.assertRegex(evidence.tools_content_sha256, r"^[0-9a-f]{64}$")
             self.assertEqual(evidence.endpoint_evidence["model"], "qwen3.6-coder")
+            dcd_support = [
+                item
+                for item in evidence.support_identities
+                if item["name"] == "dcd-pi-bundle"
+            ]
+            self.assertEqual(len(dcd_support), 1)
+            self.assertEqual(
+                evidence.runtime_bindings["support_files"]["dcd_pi_bundle"],
+                str(dcd_bundle.resolve()),
+            )
+            self.assertNotIn(str(dcd_bundle), repr(dcd_support[0]))
             command_log = calls.read_text()
             self.assertIn("load --input", command_log)
             self.assertIn("image inspect", command_log)
@@ -640,6 +667,7 @@ class ClosedEnvironmentTests(unittest.TestCase):
             {
                 "PATH": "/pinned/bin",
                 "VERILOG_EVAL_ROOT": "/source",
+                "AGENT_EVAL_DCD_PI_BUNDLE": "/opt/agent/dcd-pi.tar",
                 "CUSTOM_API_KEY": "secret",
                 "OPENAI_API_KEY": "unselected-secret",
                 "OTHER_SECRET": "leak",
@@ -653,6 +681,7 @@ class ClosedEnvironmentTests(unittest.TestCase):
             {
                 "PATH": "/pinned/bin",
                 "VERILOG_EVAL_ROOT": "/source",
+                "AGENT_EVAL_DCD_PI_BUNDLE": "/opt/agent/dcd-pi.tar",
                 "CUSTOM_API_KEY": "secret",
                 "PYTHONDONTWRITEBYTECODE": "1",
             },

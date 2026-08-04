@@ -96,13 +96,26 @@ class CanonicalRunConfigTests(unittest.TestCase):
         )
         self.assertEqual(run_config_sha256(canonical), __import__("hashlib").sha256(canonical).hexdigest())
 
-    def test_focused_dcd_pi_entry_is_a_supported_material_identity(self):
+    def test_dcd_front_end_pi_entry_requires_its_bundle_material_identity(self):
         config = valid_config()
-        config["agent"]["name"] = "pi-dcd-rtl-module"
+        config["agent"]["name"] = "pi-dcd-front-end"
+        with self.assertRaises(RunConfigError):
+            canonical_run_config(config)
 
+        config["runtime"]["support_files"].append(
+            {"name": "dcd-pi-bundle", "sha256": DIGEST_C, "size_bytes": 1234}
+        )
         canonical = canonical_run_config(config)
+        self.assertIn(b'"name":"pi-dcd-front-end"', canonical)
+        self.assertIn(b'"name":"dcd-pi-bundle"', canonical)
 
-        self.assertIn(b'"name":"pi-dcd-rtl-module"', canonical)
+        config["agent"]["name"] = "pi-dcd-rtl-module"
+        with self.assertRaises(RunConfigError):
+            canonical_run_config(config)
+
+        config["agent"]["name"] = "pi"
+        with self.assertRaises(RunConfigError):
+            canonical_run_config(config)
 
     def test_locator_changes_cannot_enter_material_identity(self):
         config = valid_config()

@@ -13,7 +13,7 @@ from agent_generation.drivers.base import (
 from agent_generation.drivers.opencode import OpenCodeDriver
 from agent_generation.drivers.pi import (
     PI_ARTIFACT_SYSTEM_PROMPT,
-    PI_DCD_DISPATCH_BINARY,
+    PI_DCD_FRONT_END_COMMAND,
     PiDriver,
 )
 
@@ -91,8 +91,15 @@ class PiDriverTests(unittest.TestCase):
             self.assertNotIn("--append-system-prompt", command)
             system_prompt = command[command.index("--system-prompt") + 1]
             self.assertEqual(system_prompt, PI_ARTIFACT_SYSTEM_PROMPT)
-            self.assertIn("MUST invoke the write or edit tool", system_prompt)
-            self.assertIn("chat text is never a submission", system_prompt)
+            self.assertEqual(
+                system_prompt,
+                "At completion, the sole formal submission is /workspace/TopModule.sv.\n"
+                "It must be a non-empty regular SystemVerilog file satisfying the public specification.\n"
+                "Chat output is not a submission.\n",
+            )
+            self.assertNotIn("write", system_prompt)
+            self.assertNotIn("edit", system_prompt)
+            self.assertNotIn("subagent", system_prompt)
             self.assertNotIn("Read /workspace/TASK.md", command[-1])
             self.assertIn("Public task specification:", command[-1])
             self.assertIn(request.prompt_text, command[-1])
@@ -106,22 +113,88 @@ class PiDriverTests(unittest.TestCase):
             )
             self.assertEqual(environment.inherit, ("VLLM_API_KEY",))
 
-    def test_focused_dcd_entry_wraps_pi_with_a_fixed_dispatcher(self):
+    def test_dcd_front_end_entry_invokes_the_extension_command_directly(self):
         with tempfile.TemporaryDirectory() as tmp:
             request = make_request(Path(tmp))
             driver = PiDriver(
                 base_url="http://127.0.0.1:58000/v1",
-                entry="rtl-module",
+                entry="front-end",
             )
 
+            config_paths = driver.write_config(request)
             command = driver.build_command(request)
 
+            settings = json.loads(config_paths[1].read_text())
+            self.assertEqual(settings["defaultProvider"], "openai-compatible")
+            self.assertEqual(settings["defaultModel"], request.model)
+            self.assertEqual(command[0], "/agent-tools/node_modules/.bin/pi")
+            self.assertNotIn("/dcd-dispatch", command)
+            self.assertNotIn("--no-extensions", command)
+            self.assertNotIn("--no-skills", command)
+            self.assertNotIn("--tools", command)
+            self.assertIn("--no-context-files", command)
+            self.assertIn("--no-prompt-templates", command)
+            system_prompt = command[command.index("--system-prompt") + 1]
+            self.assertEqual(system_prompt, PI_ARTIFACT_SYSTEM_PROMPT)
+            self.assertNotIn("write", system_prompt)
+            self.assertNotIn("edit", system_prompt)
+            self.assertNotIn("subagent", system_prompt)
+
+            prefix = PI_DCD_FRONT_END_COMMAND + " "
+            self.assertTrue(command[-1].startswith(prefix))
+            payload = json.loads(command[-1][len(prefix):])
+            self.assertEqual(payload["task"], request.prompt_text)
             self.assertEqual(
-                command[:4],
-                (PI_DCD_DISPATCH_BINARY, "--entry", "rtl-module", "--"),
+                payload["completion_contract"],
+                {
+                    "scope": "module",
+                    "required_artifact": "/workspace/TopModule.sv",
+                    "required_gates": [
+                        "interface_contract",
+                        "elaboration",
+                        "functional_verification",
+                    ],
+                    "max_repair_iterations": 3,
+                },
             )
-            self.assertEqual(command[4], "/agent-tools/node_modules/.bin/pi")
-            self.assertEqual(command[-1].endswith(request.prompt_text), True)
+
+    def test_pi_unwraps_dcd_child_events_for_aggregate_budgets(self):
+        driver = PiDriver(
+            base_url="http://127.0.0.1:58000/v1",
+            entry="front-end",
+        )
+        turn_line = json.dumps(
+            {
+                "type": "entry_appended",
+                "entry": {
+                    "type": "custom",
+                    "customType": "dcd_child_event",
+                    "data": {
+                        "agent": "front-end-design-orchestrator",
+                        "depth": 1,
+                        "event": {"type": "turn_end"},
+                    },
+                },
+            }
+        )
+        tool_line = json.dumps(
+            {
+                "type": "entry_appended",
+                "entry": {
+                    "type": "custom",
+                    "customType": "dcd_child_event",
+                    "data": {
+                        "agent": "rtl-design-orchestrator",
+                        "depth": 2,
+                        "event": {"type": "tool_execution_end"},
+                    },
+                },
+            }
+        )
+
+        self.assertEqual(driver.parse_event(turn_line), {"type": "turn_end"})
+        self.assertEqual(driver.classify_budget_event(turn_line), "turn")
+        self.assertEqual(driver.classify_budget_event(tool_line), "tool")
 
     def test_pi_compacts_cumulative_updates_without_losing_incremental_content(self):
         driver = PiDriver(base_url="http://127.0.0.1:58000/v1")
@@ -160,6 +233,45 @@ class PiDriverTests(unittest.TestCase):
             },
         )
         self.assertLess(len(normalized), len(raw_event) // 100)
+
+        child_line = json.dumps(
+            {
+                "type": "entry_appended",
+                "entry": {
+                    "type": "custom",
+                    "customType": "dcd_child_event",
+                    "data": {
+                        "agent": "verification-orchestrator",
+                        "depth": 2,
+                        "event": json.loads(raw_event),
+                    },
+                },
+            }
+        ) + "\n"
+        child_normalized = json.loads(driver.normalize_trajectory_line(child_line))
+        self.assertEqual(
+            child_normalized,
+            {
+                "type": "entry_appended",
+                "entry": {
+                    "type": "custom",
+                    "customType": "dcd_child_event",
+                    "data": {
+                        "agent": "verification-orchestrator",
+                        "depth": 2,
+                        "event": {
+                            "type": "message_update",
+                            "assistantMessageEvent": {
+                                "type": "text_delta",
+                                "contentIndex": 1,
+                                "delta": "next token",
+                            },
+                        },
+                    },
+                },
+            },
+        )
+        self.assertLess(len(json.dumps(child_normalized)), len(child_line) // 100)
 
     def test_pi_preserves_complete_and_non_json_trajectory_lines(self):
         driver = PiDriver(base_url="http://127.0.0.1:58000/v1")

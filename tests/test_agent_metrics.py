@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from agent_generation.drivers.opencode import OpenCodeDriver
@@ -29,6 +30,51 @@ class AgentTrajectoryMetricsTests(unittest.TestCase):
         self.assertEqual(usage.turns, 2)
         self.assertEqual(usage.tool_calls, 2)
         self.assertEqual(usage.usage_source, "trajectory")
+
+    def test_dcd_child_entries_contribute_to_aggregate_usage(self):
+        driver = PiDriver(
+            base_url="http://127.0.0.1:58000/v1",
+            entry="front-end",
+        )
+
+        def child(event):
+            return json.dumps(
+                {
+                    "type": "entry_appended",
+                    "entry": {
+                        "type": "custom",
+                        "customType": "dcd_child_event",
+                        "data": {
+                            "agent": "front-end-design-orchestrator",
+                            "depth": 1,
+                            "event": event,
+                        },
+                    },
+                }
+            )
+
+        trajectory = "\n".join(
+            (
+                child({"type": "turn_end"}),
+                child({"type": "tool_execution_start", "toolName": "eda_lint"}),
+                child(
+                    {
+                        "type": "message_end",
+                        "message": {
+                            "role": "assistant",
+                            "usage": {"input": 400, "output": 50},
+                        },
+                    }
+                ),
+            )
+        )
+
+        usage = aggregate_trajectory_usage(driver, trajectory)
+
+        self.assertEqual(usage.input_tokens, 400)
+        self.assertEqual(usage.output_tokens, 50)
+        self.assertEqual(usage.turns, 1)
+        self.assertEqual(usage.tool_calls, 1)
 
     def test_opencode_counts_step_tokens_reasoning_and_completed_tools(self):
         driver = OpenCodeDriver(base_url="http://127.0.0.1:58000/v1")

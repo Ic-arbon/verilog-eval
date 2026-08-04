@@ -19,7 +19,7 @@ from agent_generation.drivers.base import INLINE_ARTIFACT_INSTRUCTION
 
 
 PI_BINARY = "/agent-tools/node_modules/.bin/pi"
-PI_DCD_DISPATCH_BINARY = "/dcd-dispatch"
+PI_DCD_FRONT_END_COMMAND = "/dcd-front-end"
 PI_PROVIDER = "openai-compatible"
 PI_CONFIG_DIR = "/workspace/.agent-config/pi"
 PI_MESSAGE_UPDATE_FIELDS = (
@@ -30,11 +30,35 @@ PI_MESSAGE_UPDATE_FIELDS = (
     "toolCall",
 )
 PI_ARTIFACT_SYSTEM_PROMPT = """\
-This is an artifact-only benchmark. To submit, you MUST invoke the write or edit tool
-and create /workspace/TopModule.sv. A shell command or code block written in chat text
-is never executed, and chat text is never a submission. Do not finish until you have
-used a tool to create the file and then verified the file exists.
+At completion, the sole formal submission is /workspace/TopModule.sv.
+It must be a non-empty regular SystemVerilog file satisfying the public specification.
+Chat output is not a submission.
 """
+
+
+def _dcd_child_envelope(event: object) -> Optional[tuple[dict, dict]]:
+    if not isinstance(event, dict) or event.get("type") != "entry_appended":
+        return None
+    entry = event.get("entry")
+    if not isinstance(entry, dict) or entry.get("customType") != "dcd_child_event":
+        return None
+    data = entry.get("data")
+    if not isinstance(data, dict):
+        return None
+    agent = data.get("agent")
+    depth = data.get("depth")
+    child = data.get("event")
+    if (
+        not isinstance(agent, str)
+        or not agent
+        or isinstance(depth, bool)
+        or not isinstance(depth, int)
+        or not 1 <= depth <= 4
+        or not isinstance(child, dict)
+        or not isinstance(child.get("type"), str)
+    ):
+        return None
+    return data, child
 
 
 @dataclass(frozen=True)
@@ -49,7 +73,7 @@ class PiDriver:
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
-        if self.entry not in {None, "rtl-module"}:
+        if self.entry not in {None, "front-end"}:
             raise ValueError(f"unsupported Pi entry: {self.entry}")
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
@@ -96,6 +120,13 @@ class PiDriver:
                 "keepRecentTokens": max(1, request.max_input_tokens // 2),
             }
         }
+        if self.entry == "front-end":
+            settings.update(
+                {
+                    "defaultProvider": PI_PROVIDER,
+                    "defaultModel": request.model,
+                }
+            )
         return (
             write_json(config_path, config),
             write_json(settings_path, settings),
@@ -103,8 +134,7 @@ class PiDriver:
 
     def build_command(self, request: AgentRunRequest) -> tuple[str, ...]:
         thinking_level = "high" if self.thinking_enabled else "off"
-        inline_task = INLINE_ARTIFACT_INSTRUCTION + request.prompt_text
-        pi_command = (
+        common = (
             PI_BINARY,
             "--mode",
             "json",
@@ -112,9 +142,8 @@ class PiDriver:
             "--no-approve",
             "--offline",
             "--no-context-files",
-            "--no-extensions",
-            "--no-skills",
-            "--no-prompt-templates",
+        )
+        model = (
             "--provider",
             PI_PROVIDER,
             "--model",
@@ -123,18 +152,47 @@ class PiDriver:
             thinking_level,
             "--system-prompt",
             PI_ARTIFACT_SYSTEM_PROMPT,
-            "--tools",
-            "read,write,edit,bash",
-            inline_task,
         )
         if self.entry is None:
-            return pi_command
+            inline_task = INLINE_ARTIFACT_INSTRUCTION + request.prompt_text
+            return (
+                *common,
+                "--no-extensions",
+                "--no-skills",
+                "--no-prompt-templates",
+                *model,
+                "--tools",
+                "read,write,edit,bash",
+                inline_task,
+            )
+
+        task = request.prompt_text
+        if request.rules_text:
+            task += "\n\nPublic benchmark rules:\n" + request.rules_text
+        payload = {
+            "task": task,
+            "completion_contract": {
+                "scope": "module",
+                "required_artifact": "/workspace/TopModule.sv",
+                "required_gates": [
+                    "interface_contract",
+                    "elaboration",
+                    "functional_verification",
+                ],
+                "max_repair_iterations": 3,
+            },
+        }
+        command = PI_DCD_FRONT_END_COMMAND + " " + json.dumps(
+            payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
         return (
-            PI_DCD_DISPATCH_BINARY,
-            "--entry",
-            self.entry,
-            "--",
-            *pi_command,
+            *common,
+            "--no-prompt-templates",
+            *model,
+            command,
         )
 
     def environment(self, request: AgentRunRequest) -> AgentEnvironment:
@@ -150,7 +208,9 @@ class PiDriver:
         )
 
     def parse_event(self, line: str) -> Optional[object]:
-        return parse_json_object(line)
+        event = parse_json_object(line)
+        envelope = _dcd_child_envelope(event)
+        return envelope[1] if envelope else event
 
     def classify_budget_event(self, line: str) -> Optional[str]:
         event = self.parse_event(line)
@@ -165,7 +225,9 @@ class PiDriver:
     def normalize_trajectory_line(self, line: str) -> str:
         """Remove cumulative Pi snapshots while preserving incremental events."""
 
-        event = self.parse_event(line)
+        raw_event = parse_json_object(line)
+        envelope = _dcd_child_envelope(raw_event)
+        event = envelope[1] if envelope else raw_event
         if not isinstance(event, dict) or event.get("type") != "message_update":
             return line
         update = event.get("assistantMessageEvent")
@@ -181,6 +243,14 @@ class PiDriver:
             "type": "message_update",
             "assistantMessageEvent": compact_update,
         }
+        if envelope:
+            compact_wrapper = dict(raw_event)
+            compact_entry = dict(compact_wrapper["entry"])
+            compact_data = dict(envelope[0])
+            compact_data["event"] = compact_event
+            compact_entry["data"] = compact_data
+            compact_wrapper["entry"] = compact_entry
+            compact_event = compact_wrapper
         return json.dumps(
             compact_event,
             ensure_ascii=False,

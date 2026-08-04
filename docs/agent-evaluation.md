@@ -83,30 +83,43 @@ Change `--with-agent=pi` to run Pi. The default material values are:
 The Agent interface intentionally has no sampling controls. Thinking, context/output
 limits, host turn/tool budgets, and toolset are material run identity.
 
-### Focused DCD RTL-module producer
+### Complete DCD front-end producer
 
-`pi-dcd-rtl-module` is an explicit Pi producer rather than a prompt-selected mode. It
-requires a supplied sandbox image containing the fixed `/dcd-dispatch` executable and
-its DCD resources. The driver invokes that executable with `--entry rtl-module`; a base
-image without the dispatcher fails closed instead of silently running ordinary Pi.
+`pi-dcd-front-end` is an explicit completion-result-selected producer. The evaluation
+call adapter invokes the DCD Extension command `/dcd-front-end` directly, so the parent
+model does not decide whether to load a Skill. DCD then owns Architecture, independent
+oracle planning, RTL, semantic EDA, and bounded repair.
+
+Build a model-neutral DCD Pi bundle from the DCD repository, then provide it explicitly:
 
 ```bash
+node /absolute/path/to/digital-chip-design-agents/bin/build-pi-bundle.mjs \
+  --output /opt/agent/dcd-pi.tar
+
+export AGENT_EVAL_DCD_PI_BUNDLE=/opt/agent/dcd-pi.tar
 VERILOG_EVAL_JOBS=8 nix run .#agent-eval -- \
-  --with-agent=pi-dcd-rtl-module \
+  --with-agent=pi-dcd-front-end \
   --with-model=qwen3.6-coder \
   --with-agent-max-input-tokens=32768 \
-  --with-max-tokens=32768 \
+  --with-max-tokens=65536 \
   --with-agent-toolset=rtl \
-  --docker-image=verilog-eval-agent-sandbox:rtl-dcd-module \
-  --docker-archive=/absolute/path/to/rtl-dcd-module.tar \
   --with-problems=/absolute/path/to/problems.txt \
   --new-run --run-path-file=/absolute/path/to/run.path
 ```
 
-The producer name, image content ID, prompt inputs, and limits are material identity.
-Each trajectory starts with `dcd_dispatch`, followed by the selected Pi process's normal
-JSON events; no parent model call occurs before dispatch. The sole submission remains
-`/workspace/TopModule.sv`.
+The bundle is a bounded uncompressed tar containing exactly 16 DCD Agents, 17 Skills,
+and six Extension files—no model settings. Its SHA-256 and size are material identity; its path is
+an ephemeral runtime binding. Each sample verifies the bytes again, safely expands them
+into writable `/workspace/.agent-config/pi`, and then writes the selected model config.
+This is required because Pi acquires `settings.json.lock`.
+
+The evaluator system prompt contains only the final artifact acceptance contract. Tool
+and Orchestrator instructions come from DCD. Child Pi lifecycle entries are persisted as
+`dcd_child_event` custom entries and unwrapped only for aggregate host turn/tool budgets
+and usage accounting. DCD also uses authenticated domain-child completion and nested
+Extension-issued EDA receipts for its completion gate. The sole submission remains `/workspace/TopModule.sv`; DCD writes
+`.dcd/front-end-result.json` during execution and mirrors it as a persisted
+`dcd_front_end_result` trajectory entry. Neither form is a submission.
 
 ## Formal run
 

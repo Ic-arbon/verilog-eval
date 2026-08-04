@@ -113,7 +113,7 @@ class ToolsProjectionTests(unittest.TestCase):
             self.assertNotEqual(source_inode, projected_inode)
             self.assertEqual(projection.path.stat().st_mode & 0o222, 0)
 
-    def test_focused_dcd_pi_entry_projects_the_pinned_pi_closure(self):
+    def test_dcd_front_end_pi_entry_projects_the_pinned_pi_closure(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             source = make_tools(root)
@@ -122,7 +122,7 @@ class ToolsProjectionTests(unittest.TestCase):
             projection = project_agent_tools(
                 source_prefix=source,
                 projection_root=root / "projections",
-                agent="pi-dcd-rtl-module",
+                agent="pi-dcd-front-end",
             )
 
             self.assertTrue(

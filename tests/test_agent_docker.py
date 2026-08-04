@@ -9,6 +9,7 @@ from pathlib import Path
 
 from agent_generation.contracts import AgentEnvironment, AgentProcessSpec
 from agent_generation.docker import DockerExecutor, DockerInfrastructureError
+from agent_generation.drivers.pi import PiDriver
 
 
 class RecordingRunner:
@@ -233,6 +234,60 @@ class DockerExecutorTests(unittest.TestCase):
             self.assertEqual(result.exit_code, 86)
             self.assertEqual(result.termination_reason, "max_turns")
             self.assertEqual(result.stdout, '{"type":"compact"}\n' * 2)
+
+    def test_host_budget_counts_dcd_child_turn_entries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            workspace = root / "workspace"
+            tools = root / "tools"
+            workspace.mkdir()
+            tools.mkdir()
+            fake_docker = root / "docker"
+            child_turn = (
+                '{"type":"entry_appended","entry":{"type":"custom",'
+                '"customType":"dcd_child_event","data":{"agent":'
+                '"front-end-design-orchestrator","depth":1,"event":'
+                '{"type":"turn_end"}}}}'
+            )
+            fake_docker.write_text(
+                "#!/bin/sh\n"
+                "if [ \"$1\" = rm ]; then exit 0; fi\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                "  if [ \"$previous\" = --cidfile ]; then printf 'abcdef1234567890\\n' >\"$argument\"; fi\n"
+                "  previous=\"$argument\"\n"
+                "done\n"
+                f"printf '%s\\n' '{child_turn}'\n"
+                f"printf '%s\\n' '{child_turn}'\n"
+                "sleep 30\n"
+            )
+            fake_docker.chmod(0o755)
+            executor = DockerExecutor(
+                docker_path=str(fake_docker),
+                image="image:tag",
+                agent_tools=tools,
+                uid=1000,
+                gid=1000,
+                host_environment={},
+            )
+            driver = PiDriver(
+                base_url="http://127.0.0.1:58000/v1",
+                entry="front-end",
+            )
+            spec = AgentProcessSpec(
+                command=("fake-agent",),
+                workspace=workspace,
+                timeout_seconds=20,
+                max_turns=2,
+                max_tool_calls=5,
+                event_classifier=driver.classify_budget_event,
+            )
+
+            result = executor.run(spec)
+
+            self.assertEqual(result.status, "error")
+            self.assertEqual(result.exit_code, 86)
+            self.assertEqual(result.termination_reason, "max_turns")
 
     def test_invalid_budget_classifier_result_is_infrastructure_failure(self):
         with tempfile.TemporaryDirectory() as tmp:

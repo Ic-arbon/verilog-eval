@@ -13,6 +13,7 @@ from typing import Callable, Optional
 
 from agent_generation.contracts import AgentProcessSpec, AgentRunRequest
 from agent_generation.credentials import request_credential
+from agent_generation.dcd import DcdPiBundleError, stage_dcd_pi_bundle
 from agent_generation.docker import DockerExecutor, DockerInfrastructureError
 from agent_generation.drivers.base import AgentDriver, AgentExecutor
 from agent_generation.drivers.opencode import OpenCodeDriver
@@ -100,6 +101,30 @@ def _sample_identity(config: dict, output_path: Path, prompt_path: Path) -> tupl
     return sample_id, problem
 
 
+def _stage_dcd_resources(config: dict, bindings: dict, workspace: Path) -> None:
+    if config["agent"]["name"] != "pi-dcd-front-end":
+        return
+    matches = [
+        item
+        for item in config["runtime"]["support_files"]
+        if item["name"] == "dcd-pi-bundle"
+    ]
+    locator = bindings["support_files"].get("dcd_pi_bundle")
+    if len(matches) != 1 or not isinstance(locator, str):
+        raise DockerInfrastructureError("DCD Pi bundle binding is missing")
+    try:
+        stage_dcd_pi_bundle(
+            Path(locator),
+            workspace / ".agent-config" / "pi",
+            expected_sha256=matches[0]["sha256"],
+            expected_size_bytes=matches[0]["size_bytes"],
+        )
+    except (DcdPiBundleError, OSError) as error:
+        raise DockerInfrastructureError(
+            f"DCD Pi resources are invalid: {error}"
+        ) from error
+
+
 def _driver(config: dict) -> AgentDriver:
     common = {
         "base_url": config["endpoint"]["base_url"],
@@ -109,8 +134,8 @@ def _driver(config: dict) -> AgentDriver:
     agent = config["agent"]["name"]
     if agent == "pi":
         return PiDriver(**common)
-    if agent == "pi-dcd-rtl-module":
-        return PiDriver(entry="rtl-module", **common)
+    if agent == "pi-dcd-front-end":
+        return PiDriver(entry="front-end", **common)
     return OpenCodeDriver(**common)
 
 
@@ -230,6 +255,7 @@ def generate_agent_sample(
             max_input_tokens=limits["max_input_tokens"],
             per_call_max_tokens=limits["max_output_tokens"],
         )
+        _stage_dcd_resources(config, bindings, prepared.root)
         selected_driver.write_config(request)
         process = selected_executor.run(
             AgentProcessSpec(

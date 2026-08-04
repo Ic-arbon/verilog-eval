@@ -16,7 +16,7 @@ from typing import Any, Iterable
 
 _AGENT_PACKAGES = {
     "pi": ("@earendil-works/pi-coding-agent", "pi"),
-    "pi-dcd-rtl-module": ("@earendil-works/pi-coding-agent", "pi"),
+    "pi-dcd-front-end": ("@earendil-works/pi-coding-agent", "pi"),
     "opencode": ("opencode-ai", "opencode"),
 }
 _BANNED_TOP_LEVEL = frozenset({".npmrc", ".npm", ".cache", "cache", "logs"})

@@ -112,12 +112,15 @@ nix run .#agent-eval -- \
 scripts/validate-agent-run --expected-samples=1 "$(cat "$run_path_file")"
 ```
 
-Change the Agent to `pi` as needed. The explicit `pi-dcd-rtl-module` producer is
-also available for a caller-selected focused RTL entry, but requires an explicit
-DCD sandbox image containing `/dcd-dispatch`; see the testing guide. The formal app
-never installs or downloads Agent tools. It projects only the selected lock-derived
-production closure into
-a read-only `/agent-tools` mount. Each sample gets a fresh non-root, read-only-root
+Change the Agent to `pi` as needed. `pi-dcd-front-end` selects the complete DCD
+specification-to-verified-RTL capability through `/dcd-front-end`; it does not use the
+retired focused RTL dispatcher. Supply an explicit model-neutral DCD Pi bundle with
+`--dcd-pi-bundle` or `AGENT_EVAL_DCD_PI_BUNDLE`. The bundle bytes are material identity,
+and each sample safely expands them into its writable Pi configuration directory.
+
+This DCD front-end evaluation call adapter is distinct from the VerilogEval benchmark
+itself. The formal app never installs or downloads Agent tools. It projects only the
+selected lock-derived production closure into a read-only `/agent-tools` mount. Each sample gets a fresh non-root, read-only-root
 container containing only its public workspace; repository, dataset, hidden grader
 files, previous results, Docker socket, full run config, and unrelated environment
 are absent.
