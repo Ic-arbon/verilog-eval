@@ -387,7 +387,7 @@ The scanner materially affected all three Agent arms:
 | Pi clean | 10 | 10 | 10 |
 | Pi extensions | 18 | 18 | 18 |
 
-Those candidates were discarded and replaced with frozen invalid Verilog before hidden grading. Artifact-only policy prohibits reconstructing candidates from trajectory text, so their true correctness is unknowable. The raw scores below remain reproducible evidence of what the frozen evaluator reported, but they are **not admissible evidence for ranking bare model versus Agent capability**. A rerun after removing content-based candidate rejection is required. Diagnostic trajectory/stderr redaction remains separate and cannot alter candidate bytes or submission status.
+Those candidates were discarded and replaced with frozen invalid Verilog before hidden grading. Artifact-only policy prohibits reconstructing candidates from trajectory text, so their true correctness is unknowable. The raw scores below remain reproducible evidence of what the frozen evaluator reported, but they are **not admissible evidence for ranking bare model versus Agent capability**. A rerun after removing content-based candidate rejection was therefore required and is recorded in [the 2026-08-04 scanner-free Agent rerun](#2026-08-04-scanner-free-agent-rerun). Diagnostic trajectory/stderr redaction remains separate and cannot alter candidate bytes or submission status.
 
 ### Results
 
@@ -488,3 +488,166 @@ tool-usage.json   0d0ec1d38febed73c3effc7fdcf0d056b6bd459e4951e33b498a6546dfee11
 ```
 
 All three Agent run roots passed `scripts/validate-agent-run --expected-samples=156`. The series ended with the endpoint identity unchanged, no evaluation containers, no benchmark tmux session, and no temporary sample workspaces.
+
+## 2026-08-04 scanner-free Agent rerun
+
+### Why the evaluator and experiment changed
+
+The 2026-08-03 experiment exposed a boundary error rather than an Agent capability failure. The evaluator passed the API credential into candidate admission and rejected `TopModule.sv` whenever those bytes appeared anywhere in the file. A low-entropy local interface value collided with ordinary HDL declarations such as `localparam`; diagnostic rendering of affected trajectories consequently showed forms such as `[REDACTED]param`.
+
+That behavior coupled three concerns that must remain separate:
+
+1. the Agent owns credential handling and candidate-content safety after retrieval;
+2. the evaluator admits a candidate using structural checks only; and
+3. diagnostic trajectory and stderr persistence may redact configured values without changing candidate bytes or submission status.
+
+Evaluator commit `07672755cf5b255a33ac103440aa1bc0783bd7b2` removed credential values from candidate inspection. Candidate admission now checks only the expected path, regular-file and symlink properties, non-empty bounded size, and unchanged public-starter identity. A regression test at `commit_sample_bundle()` proves that diagnostic redaction cannot rewrite or reject an otherwise admissible candidate.
+
+A documentation-only correction could not recover the rejected results. The old evaluator had already discarded each original candidate and published frozen invalid Verilog in its place, while the artifact-only contract forbids reconstructing a submission from trajectory text. The three affected Agent arms therefore had to be regenerated and graded again. The bare-model arm did not pass through the Agent Sample Bundle publication seam, so it was not rerun; its exact 2026-08-03 result is retained below as an explicitly inherited comparison row.
+
+### Frozen rerun design
+
+The scanner-free rerun covered all 156 problems once per Agent arm, invoked strictly serially in this order:
+
+```text
+OpenCode clean → Pi clean → Pi extensions
+```
+
+The rerun retained the earlier Agent configuration:
+
+```text
+model               = qwen3.6-coder
+model root          = /opt/llm/Qwen3.6-27B
+samples             = 1
+jobs                = 8
+max input tokens    = 32,768
+max output tokens   = 32,768
+timeout              = 500s
+max turns            = 20
+max tool calls       = 50
+thinking             = enabled
+toolset              = rtl
+host grader          = unchanged Icarus flow
+```
+
+Prompt bytes, sandbox images, tool closures, and the DCD focused route were frozen before execution. The endpoint remained PID `2348609`; shared endpoint traffic was permitted and recorded descriptively. All 156 Pi-extension trajectories began with the expected `dcd_dispatch` event for `rtl-module → rtl-module-orchestrator`.
+
+The series ran from `2026-08-04T02:19:29Z` to final status publication at `2026-08-04T04:17:23Z`, for **1h 57m 54s** total elapsed time. Arm wall time below is measured from that arm's `START` to `DONE` marker. It includes concurrent generation and host grading, and is not the sum of per-sample execution durations. Because the endpoint admitted unrelated shared traffic, wall-time and timeout differences are operational observations rather than controlled latency effects.
+
+### Scanner-free results, including wall time
+
+| Arm | Pass@1 | Published / missing / invalid | Execution exceptions | Known total tokens | Turns | Tool calls | Wall time |
+| --- | ---: | ---: | --- | ---: | ---: | ---: | ---: |
+| OpenCode clean | 114/156 = **73.08%** | 151 / 5 / **0** | 6 timeouts | 3,142,614 | 615 | 504 | 2,215s = **36m 55s** |
+| Pi clean | 108/156 = **69.23%** | 150 / 6 / **0** | 6 timeouts, 1 error | **1,670,162** | **501** | **355** | **2,143s = 35m 43s** |
+| Pi extensions | **122/156 = 78.21%** | 150 / 6 / **0** | 9 timeouts | 3,987,915 | 903 | 808 | 2,713s = **45m 13s** |
+
+Known token totals are lower bounds: usage is unknown for three OpenCode samples, six Pi samples, and six Pi-extension samples. Pi clean was the fastest Agent arm. OpenCode took 72 seconds, or 3.4%, longer than Pi clean. Pi extensions took 570 seconds, or 26.6%, longer than Pi clean and 498 seconds, or 22.5%, longer than OpenCode.
+
+The unaffected bare-model result can be combined with the new Agent results as a scanner-free comparison view, provided that its source and timing caveat remain explicit:
+
+| Arm | Result source | Pass@1 | Wall time |
+| --- | --- | ---: | ---: |
+| Bare model | inherited unaffected 2026-08-03 arm | 109/156 = 69.87% | 3,785s = 1h 03m 05s |
+| OpenCode clean | scanner-free 2026-08-04 rerun | 114/156 = 73.08% | 2,215s = 36m 55s |
+| Pi clean | scanner-free 2026-08-04 rerun | 108/156 = 69.23% | **2,143s = 35m 43s** |
+| Pi extensions | scanner-free 2026-08-04 rerun | **122/156 = 78.21%** | 2,713s = 45m 13s |
+
+This is not one contemporaneous four-arm series: the bare candidate is inherited, and every problem has only one stochastic candidate per arm. The model-only and Agent generators also have different mechanics and accounting. Score and wall-time comparisons are therefore descriptive; repeated interleaved runs are required for a stable quality or latency ordering.
+
+### Paired outcomes
+
+The first three rows pair the inherited bare result with scanner-free Agent results. They were recomputed by joining the immutable 2026-08-03 and 2026-08-04 `per_problem` records by problem name. The final three rows compare arms generated in the scanner-free series:
+
+| A | B | A only | B only | Both pass | Neither passes | Exact two-sided p |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Bare model | OpenCode clean | 13 | 18 | 96 | 29 | 0.4731 |
+| Bare model | Pi clean | 19 | 18 | 90 | 29 | 1.0000 |
+| Bare model | Pi extensions | 6 | 19 | 103 | 28 | 0.0146 |
+| OpenCode clean | Pi clean | 14 | 8 | 100 | 34 | 0.2863 |
+| OpenCode clean | Pi extensions | 9 | 17 | 105 | 25 | 0.1686 |
+| Pi clean | Pi extensions | 7 | 21 | 101 | 27 | 0.0125 |
+
+Pi extensions gained 21 problems and lost 7 against Pi clean, for a net gain of 14. In this single draw, the exact paired comparison crosses 0.05 for Pi extensions versus Pi clean and for Pi extensions versus the inherited bare result. It does not cross 0.05 for Pi extensions versus OpenCode. These tests quantify the observed problem-level disagreements; they do not remove stochastic, temporal, or shared-load uncertainty.
+
+### Candidate-boundary verification
+
+A post-run audit checked ordinary `localparam` occurrences only after candidates had already been admitted, published, and graded. This audit was evidence collection, not an evaluator admission rule:
+
+| Arm | Invalid submissions | Candidates containing `localparam` | Published unchanged | Hidden-test passes |
+| --- | ---: | ---: | ---: | ---: |
+| OpenCode clean | **0** | 9 | **9/9** | 7/9 |
+| Pi clean | **0** | 11 | **11/11** | 8/11 |
+| Pi extensions | **0** | 14 | **14/14** | 12/14 |
+
+All three arms reported zero content-based invalid submissions, and every observed `localparam` candidate crossed the publication seam. This verifies removal of the collision mechanism without making candidate content part of evaluator policy.
+
+### Tool and EDA audit
+
+| Arm | Tool calls | Samples with command-line EDA | Functional simulation samples | EDA/edit/recheck loops | Loop samples passing |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OpenCode clean | 504 | 0/156 | 0 | 0 | 0 |
+| Pi clean | 355 | 7/156 | 5 | 0 | 0 |
+| Pi extensions | 808 | **147/156** | **24** | **19** | **13** |
+
+No arm invoked a dedicated semantic EDA tool. Pi extensions used generic `bash` for 210 Icarus compile matches, 36 Verilator lint matches, and 32 `vvp` simulation matches; a shell command can match more than one category. As before, EDA use was Agent-selected and initial RTL differed across arms, so these observations do not establish that EDA feedback caused the score difference.
+
+### Before-and-after record
+
+The earlier scores remain frozen evidence of the flawed evaluator. The following deltas show what the regenerated scanner-free experiment observed; they are not counts of recovered candidates and must not be interpreted causally:
+
+| Arm | Old affected Pass@1 | Scanner-free Pass@1 | Score delta | Invalid submissions | Wall-time change |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| OpenCode clean | 101/156 | 114/156 | +13 | 13 → **0** | 2,293s → 2,215s (-78s) |
+| Pi clean | 99/156 | 108/156 | +9 | 10 → **0** | 2,252s → 2,143s (-109s) |
+| Pi extensions | 108/156 | 122/156 | +14 | 18 → **0** | 2,495s → 2,713s (+218s) |
+
+The disappearance of `invalid` outcomes and successful publication of all audited `localparam` candidates directly verify the boundary fix. The score and runtime deltas do not measure the scanner's causal effect because the model regenerated every Agent candidate and endpoint load was not controlled.
+
+### Conclusions
+
+- The candidate seam now behaves as specified: structural admission is independent of candidate bytes, while diagnostic redaction remains separate.
+- Pi extensions had the highest observed score at 122/156, but also the highest Agent wall time, known token count, turn count, and tool-call count.
+- Pi clean was the fastest and least resource-intensive Agent arm, while scoring one pass below the inherited bare result in this draw.
+- OpenCode scored six passes above Pi clean with 72 seconds more wall time and substantially more known tokens.
+- The scanner-free result supports using these runs as corrected single-draw capability evidence, but not as a stable ranking. Repeated interleaved runs remain necessary.
+- Command-line EDA was common in Pi extensions, but a same-initial-artifact EDA-on/EDA-off intervention is still required for causal attribution.
+
+### Provenance
+
+```text
+Experiment root:
+/opt/agent/verilogeval-agent-clean-rerun-20260804
+
+OpenCode clean:
+/opt/agent/verilog-eval-formal/build/4e4820ef8e282ec507d384970292956895bf26367e32630c4563749a3b0cda64
+
+Pi clean:
+/opt/agent/verilog-eval-formal/build/24ecda20b74a4b462eb126008d3a770bb287cb719373f5a059dc0f695d57bfab
+
+Pi extensions:
+/opt/agent/verilog-eval-formal/build/0c16c95d5ac7d4d0844ddefd43acd5f8fe2e7c746bcb7530c40da2486eba0be5
+```
+
+Source identities:
+
+```text
+Agent evaluator: 07672755cf5b255a33ac103440aa1bc0783bd7b2
+DCD integration: 608869856aa0aa431e134aae09b7529c74dc8ff7
+model root:      /opt/llm/Qwen3.6-27B
+endpoint PID:    2348609
+```
+
+Frozen evidence and reports:
+
+```text
+freeze.json       ec456a8ce796f7d8f740fe0395afe7b970c736cf5115ed1cc685da8f62746587
+run-series.sh     4adbf655bd90faa3e2436c0133127ecf7754fe8b62823d55be3dd246742b028a
+problems.txt      301e28ce3c9653a664b4fda2358202eafdaf0f1f8104e08f7a48085a80e6cf06
+schedule.tsv      a5b2fea2d28d8df0222bb2bb53e5cddf21b3b4468dfc3e9e0002778f6e78ee3e
+comparison.json   ef2f940f6cf2516b5d93bc1923ef4f068c53727e74231367fdc6404db6c25fe8
+comparison.txt    9241402c139aa3dc3a7588274d6ffe80c92d6d7f6ed63a5332ab41257e68725b
+tool-usage.json   6459bfee726a76044b131e4afaf3974bc82c1a6b61f11454a202cad00cb2b368
+```
+
+All three run roots passed `scripts/validate-agent-run --expected-samples=156`. The rerun ended with the endpoint identity unchanged, zero evaluation containers, no benchmark tmux session, zero temporary sample workspaces, and a clean formal worktree.
