@@ -158,6 +158,65 @@ class PiDriverTests(unittest.TestCase):
                 },
             )
 
+    def test_dcd_native_entry_keeps_full_discovery_without_any_command(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = make_request(Path(tmp))
+            driver = PiDriver(
+                base_url="http://127.0.0.1:58000/v1",
+                entry="native",
+            )
+
+            config_paths = driver.write_config(request)
+            command = driver.build_command(request)
+
+            settings = json.loads(config_paths[1].read_text())
+            self.assertEqual(settings["defaultProvider"], "openai-compatible")
+            self.assertEqual(settings["defaultModel"], request.model)
+            self.assertEqual(command[0], "/agent-tools/node_modules/.bin/pi")
+            self.assertNotIn("--no-extensions", command)
+            self.assertNotIn("--no-skills", command)
+            self.assertNotIn("--tools", command)
+            self.assertNotIn("--append-system-prompt", command)
+            self.assertNotIn(PI_DCD_FRONT_END_COMMAND, " ".join(command))
+            self.assertIn("--no-context-files", command)
+            self.assertIn("--no-prompt-templates", command)
+            system_prompt = command[command.index("--system-prompt") + 1]
+            self.assertEqual(system_prompt, PI_ARTIFACT_SYSTEM_PROMPT)
+            self.assertNotIn("write", system_prompt)
+            self.assertNotIn("edit", system_prompt)
+            self.assertNotIn("subagent", system_prompt)
+            self.assertEqual(command[-1], request.prompt_text)
+            self.assertNotIn("Public task specification:", command[-1])
+
+    def test_dcd_native_entry_appends_public_rules_when_present(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            request = make_request(Path(tmp))
+            driver = PiDriver(
+                base_url="http://127.0.0.1:58000/v1",
+                entry="native",
+            )
+            task = driver.build_command(request)
+            self.assertEqual(task[-1], request.prompt_text)
+            with_rules = AgentRunRequest(
+                sample_id=request.sample_id,
+                agent_name=request.agent_name,
+                model=request.model,
+                task=request.task,
+                prompt_text=request.prompt_text,
+                rules_text="no hidden files",
+                workspace=request.workspace,
+                timeout_seconds=request.timeout_seconds,
+                max_turns=request.max_turns,
+                max_tool_calls=request.max_tool_calls,
+                max_input_tokens=request.max_input_tokens,
+                per_call_max_tokens=request.per_call_max_tokens,
+            )
+            command = driver.build_command(with_rules)
+            self.assertEqual(
+                command[-1],
+                request.prompt_text + "\n\nPublic benchmark rules:\nno hidden files",
+            )
+
     def test_pi_unwraps_dcd_child_events_for_aggregate_budgets(self):
         driver = PiDriver(
             base_url="http://127.0.0.1:58000/v1",

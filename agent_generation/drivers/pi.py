@@ -73,7 +73,7 @@ class PiDriver:
     def __post_init__(self) -> None:
         validate_base_url(self.base_url)
         validate_environment_name(self.api_key_environment)
-        if self.entry not in {None, "front-end"}:
+        if self.entry not in {None, "front-end", "native"}:
             raise ValueError(f"unsupported Pi entry: {self.entry}")
 
     def write_config(self, request: AgentRunRequest) -> tuple[Path, ...]:
@@ -120,7 +120,9 @@ class PiDriver:
                 "keepRecentTokens": max(1, request.max_input_tokens // 2),
             }
         }
-        if self.entry == "front-end":
+        if self.entry in {"front-end", "native"}:
+            # Child subagents spawned by the DCD Extension inherit these defaults
+            # from the same PI_CODING_AGENT_DIR settings.json.
             settings.update(
                 {
                     "defaultProvider": PI_PROVIDER,
@@ -164,6 +166,21 @@ class PiDriver:
                 "--tools",
                 "read,write,edit,bash",
                 inline_task,
+            )
+
+        if self.entry == "native":
+            # Full automatic discovery: the complete frozen DCD directory is
+            # mounted as PI_CODING_AGENT_DIR and Pi discovers every Skill,
+            # Agent, and Extension itself. The model selects the Skill and
+            # Orchestrator; no front-end command is injected.
+            task = request.prompt_text
+            if request.rules_text:
+                task += "\n\nPublic benchmark rules:\n" + request.rules_text
+            return (
+                *common,
+                "--no-prompt-templates",
+                *model,
+                task,
             )
 
         task = request.prompt_text

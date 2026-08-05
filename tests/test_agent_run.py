@@ -52,16 +52,16 @@ class RunnerCliStateTests(unittest.TestCase):
         self.assertEqual(options.jobs, 16)
         self.assertEqual(options.api_key_environment, "OPENAI_API_KEY")
 
-    def test_dcd_front_end_pi_entry_is_an_explicit_material_agent(self):
+    def test_dcd_native_pi_entry_is_an_explicit_material_agent(self):
         options = parse_runner_options(
             [
-                "--with-agent=pi-dcd-front-end",
+                "--with-agent=pi-dcd-native",
                 "--dcd-pi-bundle=/opt/agent/dcd-pi.tar",
             ],
             environment={"VERILOG_EVAL_JOBS": "8"},
         )
 
-        self.assertEqual(options.agent, "pi-dcd-front-end")
+        self.assertEqual(options.agent, "pi-dcd-native")
         self.assertEqual(options.dcd_pi_bundle, Path("/opt/agent/dcd-pi.tar"))
         self.assertEqual(options.jobs, 8)
 

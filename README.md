@@ -114,9 +114,12 @@ scripts/validate-agent-run --expected-samples=1 "$(cat "$run_path_file")"
 
 Change the Agent to `pi` as needed. `pi-dcd-front-end` selects the complete DCD
 specification-to-verified-RTL capability through `/dcd-front-end`; it does not use the
-retired focused RTL dispatcher. Supply an explicit model-neutral DCD Pi bundle with
-`--dcd-pi-bundle` or `AGENT_EVAL_DCD_PI_BUNDLE`. The bundle bytes are material identity,
-and each sample safely expands them into its writable Pi configuration directory.
+retired focused RTL dispatcher. `pi-dcd-native` is the acceptance-only tracer: the same
+frozen DCD-only directory and acceptance prompt, with full automatic discovery and no
+injected command, so the model must choose the Skill and Orchestrator itself. Both
+require an explicit model-neutral DCD Pi bundle with `--dcd-pi-bundle` or
+`AGENT_EVAL_DCD_PI_BUNDLE`. The bundle bytes are material identity, and each sample
+safely expands them into its writable Pi configuration directory.
 
 This DCD front-end evaluation call adapter is distinct from the VerilogEval benchmark
 itself. The formal app never installs or downloads Agent tools. It projects only the

@@ -113,6 +113,23 @@ class CanonicalRunConfigTests(unittest.TestCase):
         with self.assertRaises(RunConfigError):
             canonical_run_config(config)
 
+    def test_dcd_native_pi_entry_requires_its_bundle_material_identity(self):
+        config = valid_config()
+        config["agent"]["name"] = "pi-dcd-native"
+        with self.assertRaises(RunConfigError):
+            canonical_run_config(config)
+
+        config["runtime"]["support_files"].append(
+            {"name": "dcd-pi-bundle", "sha256": DIGEST_C, "size_bytes": 1234}
+        )
+        canonical = canonical_run_config(config)
+        self.assertIn(b'"name":"pi-dcd-native"', canonical)
+        self.assertIn(b'"name":"dcd-pi-bundle"', canonical)
+
+        config["agent"]["name"] = "opencode"
+        with self.assertRaises(RunConfigError):
+            canonical_run_config(config)
+
         config["agent"]["name"] = "pi"
         with self.assertRaises(RunConfigError):
             canonical_run_config(config)

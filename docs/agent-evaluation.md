@@ -113,6 +113,31 @@ an ephemeral runtime binding. Each sample verifies the bytes again, safely expan
 into writable `/workspace/.agent-config/pi`, and then writes the selected model config.
 This is required because Pi acquires `settings.json.lock`.
 
+### Native DCD discovery tracer
+
+`pi-dcd-native` is the acceptance-only isolated tracer. It stages the same frozen
+DCD-only Pi directory and the same acceptance system prompt, but injects no front-end
+command and disables no discovery: Pi enumerates every DCD Skill, Agent, and Extension
+from `PI_CODING_AGENT_DIR` by itself, and the model must select the Skill and Orchestrator
+naturally (`Skill → subagent → selected Orchestrator → /workspace/TopModule.sv`).
+Use it exactly like the front-end producer:
+
+```bash
+export AGENT_EVAL_DCD_PI_BUNDLE=/opt/agent/dcd-pi.tar
+VERILOG_EVAL_JOBS=8 nix run .#agent-eval -- \
+  --with-agent=pi-dcd-native \
+  --with-model=qwen3.6-coder \
+  --with-agent-max-input-tokens=32768 \
+  --with-max-tokens=65536 \
+  --with-agent-toolset=rtl \
+  --with-problems=/absolute/path/to/problems.txt \
+  --new-run --run-path-file=/absolute/path/to/run.path
+```
+
+A prior focused smoke that injected only `chip-rtl-module`, `rtl-module-orchestrator`,
+and the `subagent` Extension is invalid as full-DCD evidence: it disabled discovery and
+let a trivial task skip the Skill path. Do not reuse its outputs.
+
 The evaluator system prompt contains only the final artifact acceptance contract. Tool
 and Orchestrator instructions come from DCD. Child Pi lifecycle entries are persisted as
 `dcd_child_event` custom entries and unwrapped only for aggregate host turn/tool budgets

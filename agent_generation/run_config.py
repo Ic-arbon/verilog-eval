@@ -21,7 +21,7 @@ _PACKAGE_NAME = re.compile(
     r"(?:@[A-Za-z0-9_.-]+/)?[A-Za-z0-9][A-Za-z0-9_.-]{0,214}"
 )
 _NONCE = re.compile(r"[0-9a-f]{32}")
-_ALLOWED_AGENTS = frozenset({"pi", "pi-dcd-front-end", "opencode"})
+_ALLOWED_AGENTS = frozenset({"pi", "pi-dcd-front-end", "pi-dcd-native", "opencode"})
 _ALLOWED_TASKS = frozenset({"spec-to-rtl", "code-complete-iccad2023"})
 _INPUT_KINDS = frozenset(
     {
@@ -312,14 +312,14 @@ def validate_run_config(
         for item in config["runtime"]["support_files"]
         if isinstance(item, dict)
     )
-    if agent["name"] == "pi-dcd-front-end":
+    if agent["name"] in {"pi-dcd-front-end", "pi-dcd-native"}:
         if dcd_bundle_count != 1:
             raise RunConfigError(
-                "pi-dcd-front-end requires one dcd-pi-bundle support identity"
+                f"{agent['name']} requires one dcd-pi-bundle support identity"
             )
     elif dcd_bundle_count:
         raise RunConfigError(
-            "dcd-pi-bundle support identity is only valid for pi-dcd-front-end"
+            "dcd-pi-bundle support identity is only valid for a DCD Pi agent"
         )
     _positive_integer(config["jobs"], "jobs")
     nonce = config["nonce"]

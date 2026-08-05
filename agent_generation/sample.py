@@ -102,7 +102,7 @@ def _sample_identity(config: dict, output_path: Path, prompt_path: Path) -> tupl
 
 
 def _stage_dcd_resources(config: dict, bindings: dict, workspace: Path) -> None:
-    if config["agent"]["name"] != "pi-dcd-front-end":
+    if config["agent"]["name"] not in {"pi-dcd-front-end", "pi-dcd-native"}:
         return
     matches = [
         item
@@ -136,6 +136,8 @@ def _driver(config: dict) -> AgentDriver:
         return PiDriver(**common)
     if agent == "pi-dcd-front-end":
         return PiDriver(entry="front-end", **common)
+    if agent == "pi-dcd-native":
+        return PiDriver(entry="native", **common)
     return OpenCodeDriver(**common)
 
 

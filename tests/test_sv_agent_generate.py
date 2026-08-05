@@ -83,14 +83,14 @@ class AgentSampleFixture:
         (self.dataset / "Prob001_zero_test.sv").write_text("test\n")
         (self.dataset / "Prob001_zero_ref.sv").write_text("ref\n")
         tools = make_tools(root)
-        if agent == "pi-dcd-front-end":
+        if agent in {"pi-dcd-front-end", "pi-dcd-native"}:
             add_pi_tools(tools)
         projection = project_agent_tools(tools, root / "projections", agent)
 
         config = valid_config()
         config["agent"].update(
             name=agent,
-            toolset="rtl" if agent == "pi-dcd-front-end" else "standard",
+            toolset="rtl" if agent in {"pi-dcd-front-end", "pi-dcd-native"} else "standard",
         )
         config["endpoint"]["models_response_sha256"] = "5" * 64
         config["benchmark"]["inputs"] = [
@@ -268,6 +268,35 @@ class AgentGeneratorCliTests(unittest.TestCase):
             fixture = AgentSampleFixture(
                 root,
                 agent="pi-dcd-front-end",
+                dcd_bundle=bundle,
+            )
+            driver = DcdInspectingDriver()
+            executor = FakeExecutor(candidate)
+
+            status = main(
+                [
+                    f"--run-config={fixture.config_path}",
+                    f"--output={fixture.output}",
+                    str(fixture.prompt),
+                ],
+                driver=driver,
+                executor=executor,
+                credential_client=lambda **_request: "secret",
+            )
+
+            self.assertEqual(status, 0)
+            self.assertTrue(driver.saw_front_end_resources)
+            self.assertEqual(fixture.output.read_text(), candidate)
+
+    def test_dcd_native_resources_are_staged_before_the_driver_writes_config(self):
+        candidate = "module TopModule(output zero); assign zero=1'b0; endmodule\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            bundle = root / "dcd-pi.tar"
+            make_bundle(bundle)
+            fixture = AgentSampleFixture(
+                root,
+                agent="pi-dcd-native",
                 dcd_bundle=bundle,
             )
             driver = DcdInspectingDriver()

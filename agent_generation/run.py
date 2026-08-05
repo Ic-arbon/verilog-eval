@@ -178,7 +178,9 @@ def _parser() -> argparse.ArgumentParser:
         description="Prepare and run one content-addressed Agent evaluation"
     )
     parser.add_argument(
-        "--with-agent", choices=("pi", "pi-dcd-front-end", "opencode"), dest="agent"
+        "--with-agent",
+        choices=("pi", "pi-dcd-front-end", "pi-dcd-native", "opencode"),
+        dest="agent",
     )
     parser.add_argument("--with-model", dest="model")
     parser.add_argument(
@@ -819,9 +821,11 @@ def collect_preparation_evidence(
         raise RunnerError(f"cannot identify host toolchain: {error}") from error
 
     support_paths: dict[str, Path] = {}
-    if options.agent == "pi-dcd-front-end":
+    if options.agent in {"pi-dcd-front-end", "pi-dcd-native"}:
         if options.dcd_pi_bundle is None:
-            raise RunnerError("pi-dcd-front-end requires an explicit DCD Pi bundle")
+            raise RunnerError(
+                f"{options.agent} requires an explicit DCD Pi bundle"
+            )
         try:
             support_paths["dcd-pi-bundle"] = options.dcd_pi_bundle.resolve(
                 strict=True
@@ -829,7 +833,7 @@ def collect_preparation_evidence(
         except OSError as error:
             raise RunnerError("DCD Pi bundle is unavailable") from error
     elif options.dcd_pi_bundle is not None:
-        raise RunnerError("DCD Pi bundle is only valid for pi-dcd-front-end")
+        raise RunnerError("DCD Pi bundle is only valid for a DCD Pi agent")
     if environ.get("SSL_CERT_FILE"):
         support_paths["ca-bundle"] = Path(environ["SSL_CERT_FILE"]).resolve(strict=True)
     for support_name, support_path in (

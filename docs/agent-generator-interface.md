@@ -80,7 +80,10 @@ nix run .#agent-eval -- \
 
 `--with-agent=opencode` selects OpenCode. `--with-agent=pi-dcd-front-end` selects the
 complete DCD front-end capability and additionally requires `--dcd-pi-bundle=<path>` (or
-`AGENT_EVAL_DCD_PI_BUNDLE`). `--with-agent-toolset=rtl` selects the larger RTL image.
+`AGENT_EVAL_DCD_PI_BUNDLE`). `--with-agent=pi-dcd-native` selects the acceptance-only
+native discovery tracer: the same frozen DCD directory and acceptance prompt with no
+injected command, so the model must select the Skill and Orchestrator itself. Both DCD
+agents require the bundle. `--with-agent-toolset=rtl` selects the larger RTL image.
 Agent evaluation exposes neither `temperature` nor `top_p`; those remain only part of the
 unchanged model-producer interface.
 
